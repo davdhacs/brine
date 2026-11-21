@@ -2,7 +2,7 @@
 // between input files and output files, inferred from co-change
 // history on full builds, validated by shadow/audit runs.
 //
-// Safety rules (see SENSORS.md):
+// Safety rules (see docs/sensors.md):
 //   - Only POSITIVE edges are learned: (input changed, output changed)
 //     in the same full build. "Output did not change" is never recorded
 //     as an absence — a comment-only input change leaves outputs

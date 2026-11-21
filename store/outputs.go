@@ -17,7 +17,7 @@ import (
 //
 // This is the correctness-critical distinction from SnapshotDir (which
 // captured the whole tree and, on a warm hit, overwrote non-input
-// edits — see SENSORS.md "Correctness rules").
+// edits — see docs/sensors.md "Correctness rules").
 func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64) (*Manifest, error) {
 	inputs := make(map[string]bool, len(readSet))
 	for _, f := range readSet {

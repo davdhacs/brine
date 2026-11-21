@@ -1,7 +1,7 @@
 // Package sensor is the registry and fusion layer for dependency
 // discovery sensors. Each sensor answers some variant of "which files
 // does this command depend on?" with a different soundness/cost
-// profile; fusion combines them (see SENSORS.md).
+// profile; fusion combines them (see docs/sensors.md).
 package sensor
 
 import (
@@ -40,7 +40,7 @@ type Reading struct {
 	Files  []string
 }
 
-// Fusion combines readings by the SENSORS.md rules:
+// Fusion combines readings by the docs/sensors.md rules:
 // union for coverage, exact beats heuristic. All readings are unioned
 // (a heuristic never removes an exact sensor's files), and the fused
 // tier is the strongest tier that contributed.
@@ -110,14 +110,11 @@ func DryRunTrace(dir string, args []string) (Reading, error) {
 // CacheProtocol discovers which compilation units were rebuilt from a
 // compiler cache's hit/miss log.
 //
-// TODO(sensor #9): GOCACHEPROG (see tools/gocache-serve in the
-// stackrox CA work — the protocol plumbing already exists there)
-// reports ActionID→outputID per package; a miss reveals exactly which
-// packages the input change invalidated. ccache -s / sccache logs are
-// the same sensor for C/C++. This is an during-execution EXACT sensor
-// and doubles as the reconciliation oracle for the learned model.
+// Sensor #9 is implemented in the gocache package (GOCACHEPROG
+// pass-through proxy with remote tier and miss log). This stub is kept
+// for the registry; see gocache/serve.go.
 func CacheProtocol(dir string) (Reading, error) {
-	return Reading{}, fmt.Errorf("cache-protocol sensor: not implemented (reuse gocache-serve)")
+	return Reading{}, fmt.Errorf("sensor #9 is implemented in gocache/, not here")
 }
 
 // Coverage discovers test→code mappings for test-selection memoization.

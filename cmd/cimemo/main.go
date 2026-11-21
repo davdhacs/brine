@@ -1,6 +1,6 @@
 // cimemo: content-addressed memoization for any build command.
 //
-// v0.4 architecture — multi-sensor with learned edges (see SENSORS.md):
+// v0.4 architecture — multi-sensor with learned edges (see docs/sensors.md):
 //
 //	COLD RUN:  discover the read-set via the sensor stack (go list -deps
 //	           for Go — exact; lsof observation otherwise — heuristic),

@@ -2,7 +2,7 @@
 // the standard GOCACHE directory layout, plus a miss log.
 //
 // Why a proxy at all, locally? Three inputs to cimemo's reasoning (see
-// SENSORS.md, sensor #9):
+// docs/sensors.md, sensor #9):
 //
 //  1. Exact work accounting — the miss log reports which actions a
 //     build missed/put, i.e. what a change actually invalidated
