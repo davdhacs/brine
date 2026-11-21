@@ -164,8 +164,17 @@ func (s *Store) Validate(m *Manifest, dir string) (bool, []string) {
 	for _, d := range m.OutputDirs {
 		outputRoots[d] = true
 	}
+	// Also exclude output FILES at any level (flat projects: make
+	// writes .o next to sources; wiping them must not invalidate).
+	outputFiles := map[string]bool{}
+	for _, b := range m.Blobs {
+		outputFiles[b.Path] = true
+	}
+	for k, v := range outputRoots {
+		outputFiles[k] = v
+	}
 	for d, want := range m.DirListings {
-		if got := dirListingHashFiltered(dir, d, outputRoots); got != want {
+		if got := dirListingHashFiltered(dir, d, outputFiles); got != want {
 			reasons = append(reasons, "dir changed: "+d+"/")
 		}
 	}

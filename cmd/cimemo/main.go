@@ -382,7 +382,10 @@ func cmdMemoize(args []string, forceFull bool) {
 				readSet = unionFiles(readSet, gitFiles)
 			}
 		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
-			readSet = gitFiles
+			// Same build-write invariant: tracked files rewritten by
+			// the build (committed artifacts, make freshness targets)
+			// are outputs of this build, not inputs.
+			readSet = filterBuildState(wd, gitFiles, builtAt)
 			strategy = store.StrategyFallback
 		}
 	}
@@ -442,6 +445,9 @@ func cmdMemoize(args []string, forceFull bool) {
 	}
 	for _, d := range m.OutputDirs {
 		outputDirs[d] = true
+	}
+	for _, b := range m.Blobs {
+		outputDirs[b.Path] = true // flat projects: root-level output files
 	}
 	m.InputHashes, m.DirListings = store.BuildProvenanceFiltered(wd, readSet, outputDirs)
 	m.Closure = closure
@@ -873,9 +879,18 @@ func filterBuildState(wd string, files []string, builtAt int64) []string {
 		if i := strings.IndexByte(f, '/'); i > 0 {
 			top = f[:i]
 		}
-		if !roots[top] {
-			out = append(out, f)
+		if roots[top] {
+			continue
 		}
+		// Files WRITTEN during the build are outputs, not inputs — even
+		// when observed as reads: make opens its outputs to check
+		// freshness before relinking (flat make projects have no output
+		// dirs for the root filter to catch). A file modified by the
+		// build cannot be an input to that same build.
+		if info, err := os.Stat(filepath.Join(wd, f)); err == nil && info.ModTime().UnixNano() > builtAt {
+			continue
+		}
+		out = append(out, f)
 	}
 	return out
 }

@@ -62,8 +62,11 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 			return nil
 		}
 
-		// Rule (a): inputs are never outputs.
-		if inputs[rel] {
+		// Rule (a): inputs are never outputs — EXCEPT files written
+		// during the build (mtime > builtAt): a build-writer cannot be
+		// an input to the same build (make's freshness opens put
+		// outputs in observed read-sets; flat projects).
+		if inputs[rel] && info.ModTime().UnixNano() <= builtAt {
 			return nil
 		}
 		// Rule (b): only files the build touched.

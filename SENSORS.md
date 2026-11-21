@@ -85,6 +85,63 @@ per-project tooling. Absolute times are not comparable (local disk vs
 CI runners + docker assembly), but the warm path does the same work:
 validate inputs, restore/link outputs, skip the build.
 
+## Case studies: UI (vite/npm) and flat C (sqlite, 2026-11-22)
+
+**Vite+TS (npm run build)** — receipt 41ms vs 2.4s; source AND
+package-lock changes miss correctly (dependency identity is sound via
+the tracked lockfile). The generic path (observed∪git fallback +
+commit receipts) covers JS toolchains with zero language-specific
+code.
+
+**sqlite amalgamation (plain make, FLAT project)** — receipt 76ms vs
+9s; make accepts the restore ("up to date"). Found and fixed the
+flat-project gap, three parts:
+1. make opens its OUTPUTS to check freshness → lsof sees them as
+   reads → the observed∪git union classified .o files as inputs →
+   snapshot excluded them (empty receipt) AND wiping them invalidated.
+   Fix: the build-write invariant — a file modified during the build
+   (mtime > builtAt) is an OUTPUT of that build, never an input,
+   applied to read-set filtering (both observed and git-fallback
+   paths, which also covers committed artifacts) and to the snapshot's
+   input-exclusion rule.
+2. root-level output FILES (no output dir) changed the "." listing →
+   listing exclusion now covers output blob paths, not just dirs.
+Divergence detector earned its keep here too: it flagged the empty
+receipt ("same closure, different outputs") before the fix.
+
+## Positioning: cimemo vs Bazel (2026-11-22)
+
+Bazel/Buck2 solve the key-closure problem by CONSTRUCTION: explicit
+declared dependencies, hermetic actions, content-addressed remote
+caching and execution. cimemo retrofits memoization onto whatever
+build system you already have. The trade:
+
+| | Bazel | cimemo |
+|---|---|---|
+| migration | rewrite the build (BUILD files for every package; person-years at StackRox scale) | none — wrap the command |
+| soundness | by construction (declared deps) | discovered (sensors + audits + ground-truth gates) |
+| caching granularity | actions | whole outputs (receipts) + protocol tiers |
+| remote execution | yes | no (caching only) |
+| build systems | the ones you port to it | go, cargo, npm, make, cmake, docker, ... |
+
+Composition, not just competition:
+- cimemo receipts sit ABOVE bazel invocations (memoize the whole
+  `bazel build` including analysis phase and workspace setup);
+  Bazel's remote cache sits within. No conflict — different layers.
+- cimemo's GOCACHEPROG/ccache/sccache tiers are the no-migration
+  equivalent of Bazel's remote cache for teams that cannot port.
+- The sensor stack (observation, divergence detection, ground truth)
+  exists precisely because legacy builds don't declare dependencies:
+  it is the amortized cost of avoiding the Bazel migration, paid in
+  tooling rather than in BUILD files. Bazel's answer to the same
+  problem is to make the question impossible to ask.
+
+Where Bazel wins outright: hermetic reproducibility guarantees,
+remote execution (distributed compilation), polyglot graph queries.
+Where cimemo wins: zero adoption cost, works on the build you have
+today, receipt-level caching (Bazel still runs its analysis phase on
+every invocation; a receipt skips the tool entirely).
+
 ## Certainty model (2026-11-22)
 
 Question: are receipts byte-for-byte certain? Answer now enforced and
