@@ -1,0 +1,4 @@
+.cimemo/
+bin/
+observe/shim/*.dylib
+*.test
