@@ -89,4 +89,8 @@ jobs:
             grep -E "\[cimemo\]" /tmp/cimemo-receipt.log | head -5
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$VERDICT" != "byte-identical" ]; then
+            echo "--- dissection of the difference:"
+            /tmp/cimemo dissect out/plain out/cimemo 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           [ "$VERDICT" = "byte-identical" ]
