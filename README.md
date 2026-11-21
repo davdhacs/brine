@@ -1,7 +1,6 @@
 # cimemo
 
-Content-addressed memoization for build commands. On unchanged inputs,
-outputs are restored from a blob store — the build tool never runs.
+Content-addressed memoization for build commands.
 
 ```
 $ cimemo go build -o app ./cmd/app   # cold: builds, stores receipt
