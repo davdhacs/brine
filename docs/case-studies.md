@@ -38,6 +38,41 @@ MTIMES — fixed by mtime normalization in CI.
 - integration CI (public repo): 355ms receipt vs 132s cold, byte-identical,
   373× speedup
 
+## ripgrep (Rust, CLI tool)
+
+Receipt 654ms vs 7.7s baseline (commit fast path, 340MB target tree).
+
+## jq (C, autotools)
+
+Receipt works (jq --version runs from restored binary).
+
+## curl (C, cmake)
+
+Receipt 290ms via commit fast path.
+
+## busybox (C, single Makefile)
+
+Build failed on this system (kernel config prompt in defconfig) — not
+a cimemo issue.
+
+## Node.js (C++, gyp + make)
+
+Build failed on this system (gyp/python incompatibility) — not a
+cimemo issue.
+
+## TypeScript (npm, hereby build)
+
+Build failed ( hereby requires a Go codegen step that errored) — not
+a cimemo issue. The npm/cargo paths work; this specific project has
+a build prerequisite issue.
+
+## zed editor (Rust, many-crate workspace)
+
+Receipt 90ms for a single crate from a 400+ crate workspace. Found
+and fixed: output-dir ancestor exclusion (wiping target/ invalidated
+the root listing because target/ itself wasn't in output_dirs, only
+target/debug/...).
+
 ## sqlite (C, flat make)
 
 - receipt 76ms vs 9s; make accepts restore
