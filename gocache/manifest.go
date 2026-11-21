@@ -91,10 +91,23 @@ func loadSessionManifest(r *Remote) *SessionManifest {
 // saveSessionManifest merges this session's actions into the cloud
 // manifest (union, bounded to the most recent N) and uploads it.
 func saveSessionManifest(r *Remote, sessionActions []string) {
-	if len(sessionActions) == 0 {
+	m := saveMerge(loadSessionManifest(r), sessionActions, r)
+	if m == nil {
 		return
 	}
-	old := loadSessionManifest(r)
+	data, _ := json.Marshal(m)
+	if err := r.put("m/"+manifestKey(), data); err != nil {
+		logf("manifest upload: %v", err)
+	}
+}
+
+// saveMerge is the testable merge core: union of old and session
+// actions, bounded, most recent kept. Returns nil when there is
+// nothing to record.
+func saveMerge(old *SessionManifest, sessionActions []string, r *Remote) *SessionManifest {
+	if len(sessionActions) == 0 {
+		return nil
+	}
 	seen := make(map[string]bool, len(old.Actions)+len(sessionActions))
 	var merged []string
 	for _, a := range append(append([]string{}, old.Actions...), sessionActions...) {
@@ -106,10 +119,7 @@ func saveSessionManifest(r *Remote, sessionActions []string) {
 	if len(merged) > manifestMaxActions {
 		merged = merged[len(merged)-manifestMaxActions:]
 	}
-	data, _ := json.Marshal(&SessionManifest{Actions: merged})
-	if err := r.put("m/"+manifestKey(), data); err != nil {
-		logf("manifest upload: %v", err)
-	}
+	return &SessionManifest{Actions: merged}
 }
 
 // prefetch bulk-downloads the manifest's actions into the local cache.
