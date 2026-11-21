@@ -231,3 +231,65 @@ func discoverIgnoredConfigs(wd string) []string {
 	}
 	return out
 }
+
+// reportEffectiveConfig prints the non-default key configuration in
+// effect, framed as what could be saved to .cimemo.json. Silent when
+// everything is default (tier 0 — zero config, zero noise).
+func reportEffectiveConfig(wd string) {
+	cfg := loadConfig(wd)
+	var lines []string
+	var hint []string
+
+	if len(cfg.KeyEnv) > 0 {
+		envList := `"` + strings.Join(cfg.KeyEnv, `", "`) + `"`
+		lines = append(lines, fmt.Sprintf("  key_env:   [%s]", envList))
+	}
+	if len(cfg.KeyFiles) > 0 {
+		fileList := `"` + strings.Join(cfg.KeyFiles, `", "`) + `"`
+		lines = append(lines, fmt.Sprintf("  key_files: [%s]", fileList))
+	}
+	if cfg.BuildVCS != "" {
+		lines = append(lines, fmt.Sprintf("  buildvcs:  %q", cfg.BuildVCS))
+	}
+	if t := os.Getenv("CIMEMO_TRUST_LOCAL"); t == "1" {
+		lines = append(lines, "  trust_local: true (env)")
+	}
+
+	// check for untracked configs the built-in scan catches but that
+	// aren't in key_files (they're in the read-set, working, but the
+	// user might not know)
+	for _, cfgFile := range untrackedConfigs(wd) {
+		alreadyKeyed := false
+		for _, kf := range cfg.KeyFiles {
+			if kf == cfgFile {
+				alreadyKeyed = true
+				break
+			}
+		}
+		if !alreadyKeyed {
+			hint = append(hint, fmt.Sprintf("  %q (untracked, auto-detected — add to key_files to make explicit)", cfgFile))
+		}
+	}
+
+	// env vars currently set that are in KeyEnv (so the user sees the values)
+	if len(cfg.KeyEnv) > 0 {
+		for _, name := range cfg.KeyEnv {
+			if v := os.Getenv(name); v != "" {
+				hint = append(hint, fmt.Sprintf("  env %s=%q is active", name, v))
+			}
+		}
+	}
+
+	if len(lines) > 0 || len(hint) > 0 {
+		fmt.Println("[cimemo] config:")
+		for _, l := range lines {
+			fmt.Println(l)
+		}
+		for _, h := range hint {
+			fmt.Printf("  suggest: %s\n", h)
+		}
+		if _, err := os.Stat(filepath.Join(wd, ".cimemo.json")); os.IsNotExist(err) && len(lines) > 0 {
+			fmt.Println("  persist: cimemo record <command>  (or copy the above into .cimemo.json)")
+		}
+	}
+}

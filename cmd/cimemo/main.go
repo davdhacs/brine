@@ -588,6 +588,11 @@ func cmdMemoize(args []string, forceFull bool) {
 		storeCommitReceiptIfClean(st, m, wd, keyCommand, toolchain)
 	}
 
+	// Effective config report: what's influencing keys that could be
+	// persisted to .cimemo.json (or already is). Only prints when there
+	// IS something non-default — silent for the zero-config case.
+	reportEffectiveConfig(wd)
+
 	// Pin audit (config determinism): floating dependency references
 	// make builds nondeterministic and caches unreliable — name them.
 	for _, f := range pinaudit.Audit(wd) {
