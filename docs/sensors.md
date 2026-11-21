@@ -15,6 +15,22 @@ this command depend on?" with a different soundness/cost profile.
 | 6 | output content diffs (blob store + divergence detector) | ground truth | `store` + `dissect` | post-exec |
 | 9 | GOCACHEPROG pass-through proxy + miss log | exact | `gocache` | during (go only) |
 
+## Cross-command dependency graph
+
+Receipts record what each command reads (read_set) and writes (blobs).
+Connecting them gives the data-flow graph — the equivalent of a CI
+`needs:` chain, derived from observation:
+
+```
+cimemo graph
+  configure.sh → cc -o program main.c (via generated.h)
+```
+
+When a command is rebuilt, the graph identifies dependent commands
+whose receipts are now stale (their inputs changed via the rebuilt
+command's outputs, even though their own git-tracked closure didn't
+change).
+
 ## Planned sensors
 
 | # | Sensor | Tier | Status |
