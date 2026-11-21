@@ -69,8 +69,12 @@ func TestARMembersDeterministicNaming(t *testing.T) {
 	mkAr := func(path, memberName string) {
 		named := filepath.Join(dir, memberName)
 		os.WriteFile(named, []byte("package archive bytes"), 0o644)
-		if err := exec.Command("ar", "rc", path, named).Run(); err != nil {
-			t.Fatal(err)
+		// rust writes BSD-format archives on every platform; GNU ar
+		// defaults to its own format on Linux — ask for BSD to match.
+		if err := exec.Command("ar", "rc", "--format=bsd", path, named).Run(); err != nil {
+			if err2 := exec.Command("ar", "rc", path, named).Run(); err2 != nil {
+				t.Fatal(err, err2)
+			}
 		}
 	}
 	mkAr(filepath.Join(dir, "a.rlib"), "crate1.0abcdefgh.rcgu.o")
