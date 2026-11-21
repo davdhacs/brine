@@ -23,7 +23,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,6 +83,8 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "record" && len(args) > 1:
+		cmdRecord(args[1:])
 	case args[0] == "dissect" && len(args) == 3:
 		rep, err := dissect.Diff(args[1], args[2])
 		if err != nil {
@@ -146,21 +147,6 @@ func cmdMemoize(args []string, forceFull bool) {
 	// gets removed by that filter (it is an output); a config written
 	// outside cimemo (manual ./configure) stays and is hashed like any
 	// input, catching config flips.
-	untrackedConfigs := func() []string {
-		var out []string
-		for _, pat := range []string{"config.h", "config.status", "CMakeCache.txt", "*.cmake", "local.mk", ".env"} {
-			if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
-				for _, f := range files {
-					if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
-						rel, _ := filepath.Rel(wd, f)
-						out = append(out, filepath.ToSlash(rel))
-					}
-				}
-			}
-		}
-		return out
-	}
-
 	// === Commit-receipt fast path ===
 	// A clean tree at HEAD is exactly determined: SHA → tree → closure.
 	// This skips `go list`, closure hashing, and (in CI) the module
@@ -179,7 +165,7 @@ func cmdMemoize(args []string, forceFull bool) {
 					blobSet[b.Path] = true
 				}
 				skipFast := false
-				for _, cfg := range untrackedConfigs() {
+				for _, cfg := range untrackedConfigs(wd) {
 					if !blobSet[cfg] {
 						fmt.Printf("[cimemo] commit receipt skipped: untracked config %s is not produced by this receipt\n", cfg)
 						skipFast = true
@@ -348,7 +334,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// created-during-op = generated input consumed later in the same
 	// invocation, immune to same-second mtime granularity.
 	var writes *observe.Writes
-	if !isGo {
+	if !isGo && boolOr(loadConfig(wd).Writes, true) {
 		writes = observe.NewWrites(wd)
 		defer writes.Close()
 	}
@@ -360,7 +346,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// → miss → safe. Absent (wiped) → matches → hit.
 	if !isGo && !isDocker && !forceFull {
 		if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
-			candidates := unionFiles(gitFiles, untrackedConfigs())
+			candidates := unionFiles(gitFiles, untrackedConfigs(wd))
 			if len(candidates) > 0 {
 				pk := key.FromFiles(wd, candidates, command+"|"+toolchain+vcsFold(wd)+keyTail(wd))
 				if st.HasManifest(pk) {
@@ -485,7 +471,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		readSet = dockerContextClosure(wd, args)
 		strategy = store.StrategyFallback
 	} else if !isGo {
-		if observed := filterWrites(filterBuildState(wd, unionFiles(reads.Files(wd), untrackedConfigs()), builtAt)); len(observed) > 0 {
+		if observed := filterWrites(filterBuildState(wd, unionFiles(reads.Files(wd), untrackedConfigs(wd)), builtAt)); len(observed) > 0 {
 			readSet = observed
 			strategy = store.StrategyObserved
 			// Orchestrator blindness: builds that delegate into
@@ -501,7 +487,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			// Same build-write invariant: tracked files rewritten by
 			// the build (committed artifacts, make freshness targets)
 			// are outputs of this build, not inputs.
-			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs()), builtAt))
+			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs(wd)), builtAt))
 			strategy = store.StrategyFallback
 		}
 	}
@@ -875,7 +861,23 @@ func vcsFoldActive() bool {
 	if strings.Contains(os.Getenv("GOFLAGS"), "-buildvcs=false") {
 		return false
 	}
-	return loadConfig(".").Deterministic.BuildVCS != "off"
+	return loadConfig(".").BuildVCS != "off"
+}
+
+// untrackedConfigs finds config artifacts that may be build inputs.
+func untrackedConfigs(wd string) []string {
+	var out []string
+	for _, pat := range []string{"config.h", "config.status", "CMakeCache.txt", "*.cmake", "local.mk", ".env"} {
+		if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
+			for _, f := range files {
+				if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
+					rel, _ := filepath.Rel(wd, f)
+					out = append(out, filepath.ToSlash(rel))
+				}
+			}
+		}
+	}
+	return out
 }
 
 // gitHead returns the current commit, or "" outside a repo.
@@ -901,22 +903,6 @@ func vcsFold(wd string) string {
 		return "" // not a git repo — nothing to fold
 	}
 	return "|commit:" + strings.TrimSpace(string(out))
-}
-
-// configFile is the checkable-in cimemo configuration.
-type configFile struct {
-	Deterministic struct {
-		BuildVCS string `json:"buildvcs"` // "off" to skip VCS key-folding
-	} `json:"deterministic"`
-}
-
-func loadConfig(wd string) configFile {
-	var c configFile
-	data, err := os.ReadFile(filepath.Join(wd, ".cimemo.json"))
-	if err == nil {
-		json.Unmarshal(data, &c)
-	}
-	return c
 }
 
 // verifyRestored re-inspects a restored go binary against the
@@ -1070,4 +1056,196 @@ func unionFiles(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// cmdRecord: run with full instrumentation, then write discovered
+// configuration to .cimemo.json. The "learn your build" command.
+func cmdRecord(args []string) {
+	command := strings.Join(args, " ")
+	wd, _ := os.Getwd()
+
+	// Load/store setup
+	st, err := store.New(filepath.Join(wd, ".cimemo"))
+	if err != nil {
+		fatal("store: %v", err)
+	}
+	if os.Getenv("CIMEMO_REMOTE") == "1" {
+		os.Setenv("CIMEMO_GOCACHE_REMOTE", "1")
+		st.SetRemote(gocache.NewRemoteFromEnv())
+	}
+
+	goPatterns := key.GoPatterns(args)
+	isGo := goPatterns != nil
+	isDocker := isDockerBuild(args)
+
+	fmt.Printf("[cimemo] record: running %s with full instrumentation\n", command)
+	buildStart := time.Now()
+	builtAt := buildStart.UnixNano()
+
+	// writes tracking for non-go
+	var writes *observe.Writes
+	if !isGo && boolOr(loadConfig(wd).Writes, true) {
+		writes = observe.NewWrites(wd)
+		defer writes.Close()
+	}
+	writesActive := writes != nil && writes.Active()
+
+	reads := observe.NewReads()
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if isGo {
+		if self, err := os.Executable(); err == nil {
+			statsPath := filepath.Join(wd, ".cimemo", fmt.Sprintf("gocache-stats-%d.json", os.Getpid()))
+			cmd.Env = append(os.Environ(),
+				"GOCACHEPROG="+self+" gocache",
+				"CIMEMO_GOCACHE_STATS="+statsPath,
+				"CIMEMO_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
+		}
+	}
+	if err := cmd.Start(); err != nil {
+		fatal("start: %v", err)
+	}
+	if !isGo {
+		if _, err := os.Stat("/proc"); err == nil {
+			go reads.TrackProcTree(cmd.Process.Pid, 20*time.Millisecond)
+		} else {
+			go reads.Track(cmd.Process.Pid, 50*time.Millisecond)
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fatal("run: %v", err)
+	}
+	buildTime := time.Since(buildStart)
+
+	// read-set discovery (same as cmdMemoize)
+	var readSet []string
+	if isDocker {
+		readSet = dockerContextClosure(wd, args)
+	} else if isGo {
+		readSet, err = key.GoClosure(wd, goPatterns)
+		if err != nil {
+			fatal("closure: %v", err)
+		}
+	} else {
+		var writtenSet map[string]bool
+		if writesActive {
+			writtenSet = map[string]bool{}
+			for _, f := range writes.Files(wd) {
+				writtenSet[f] = true
+			}
+		}
+		filterWrites := func(files []string) []string {
+			if writtenSet == nil {
+				return files
+			}
+			var out []string
+			for _, f := range files {
+				if !writtenSet[f] {
+					out = append(out, f)
+				}
+			}
+			return out
+		}
+		observed := filterWrites(filterBuildState(wd, unionFiles(reads.Files(wd), untrackedConfigs(wd)), builtAt))
+		if len(observed) > 0 {
+			readSet = observed
+			if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
+				readSet = unionFiles(readSet, filterWrites(gitFiles))
+			}
+		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
+			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs(wd)), builtAt))
+		}
+	}
+
+	if len(readSet) == 0 {
+		fmt.Println("[cimemo] record: no read-set derivable")
+		return
+	}
+
+	// store receipt
+	toolchain := key.BuildConfig(wd)
+	keyCommand := command
+	if isDocker {
+		for _, t := range dockerBuildTags(args) {
+			keyCommand = strings.ReplaceAll(keyCommand, " "+t+" ", " ")
+		}
+	}
+	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd))
+
+	var m *store.Manifest
+	if isDocker {
+		m = &store.Manifest{Key: k, Created: time.Now()}
+		for _, tag := range dockerBuildTags(args) {
+			if id, err := dockerImageID(tag); err == nil {
+				m.ImageOutputs = append(m.ImageOutputs, store.ImageRef{ImageID: id, Tag: tag})
+			}
+		}
+	} else {
+		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt)
+		if err != nil {
+			fatal("snapshot: %v", err)
+		}
+	}
+	m.Command = command
+	m.Strategy = "record"
+	m.ReadSet = readSet
+	m.BuiltAt = builtAt
+	m.VCSCommit = gitHead(wd)
+	m.KeyTail = keyTail(wd)
+	outputDirs := map[string]bool{}
+	for _, b := range m.Blobs {
+		p := b.Path
+		for {
+			if i := strings.LastIndexByte(p, '/'); i > 0 {
+				p = p[:i]
+				outputDirs[p] = true
+			} else {
+				break
+			}
+		}
+	}
+	for _, d := range m.OutputDirs {
+		outputDirs[d] = true
+	}
+	for _, b := range m.Blobs {
+		outputDirs[b.Path] = true
+	}
+	m.InputHashes, m.DirListings = store.BuildProvenanceFiltered(wd, readSet, outputDirs)
+	if err := st.PutManifest(m); err != nil {
+		fatal("manifest store: %v", err)
+	}
+
+	// buildinfo for advisory
+	var buildInfoVCS string
+	for _, ref := range m.Blobs {
+		if info, err := buildinfo.Inspect(filepath.Join(wd, ref.Path)); err == nil && info != nil {
+			buildInfoVCS = info.VCSRevision
+			break
+		}
+	}
+
+	fmt.Printf("[cimemo] record: built in %s, %d outputs, %d inputs\n",
+		buildTime.Round(time.Millisecond), len(m.Blobs), len(readSet))
+
+	// check for divergence (prior build with same closure)
+	divergence := false
+	if prev := st.LatestForClosure(key.ClosureHash(wd, readSet), k); prev != nil {
+		divergence = true
+	}
+
+	// collect + record
+	advisories := collectAdvisories(wd, isGo, readSet, divergence, buildInfoVCS, writesActive)
+	if len(advisories) == 0 {
+		fmt.Println("[cimemo] record: nothing to advise")
+	} else {
+		fmt.Printf("[cimemo] record: %d advisory(ies)\n", len(advisories))
+	}
+	if err := recordConfig(wd, advisories); err != nil {
+		fmt.Fprintf(os.Stderr, "[cimemo] record: config write: %v\n", err)
+	}
 }

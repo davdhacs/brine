@@ -225,27 +225,16 @@ func localDigest(image string) string {
 func keyTail(wd string) string {
 	var parts []string
 
-	if vars := os.Getenv("CIMEMO_KEY_ENV"); vars != "" {
-		for _, name := range strings.Split(vars, ",") {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
-			parts = append(parts, "env:"+name+"="+os.Getenv(name))
-		}
+	cfg := loadConfig(wd)
+	for _, name := range cfg.KeyEnv {
+		parts = append(parts, "env:"+name+"="+os.Getenv(name))
 	}
 
-	if globs := os.Getenv("CIMEMO_KEY_FILES"); globs != "" {
-		for _, g := range strings.Split(globs, ",") {
-			g = strings.TrimSpace(g)
-			if g == "" {
-				continue
-			}
-			if files, _ := filepath.Glob(filepath.Join(wd, g)); len(files) > 0 {
-				for _, f := range files {
-					if v, ok := key.HashInput(wd, filepath.Base(f)); ok {
-						parts = append(parts, "file:"+filepath.Base(f)+"="+v)
-					}
+	for _, g := range cfg.KeyFiles {
+		if files, _ := filepath.Glob(filepath.Join(wd, g)); len(files) > 0 {
+			for _, f := range files {
+				if v, ok := key.HashInput(wd, filepath.Base(f)); ok {
+					parts = append(parts, "file:"+filepath.Base(f)+"="+v)
 				}
 			}
 		}
