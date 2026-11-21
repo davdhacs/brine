@@ -296,11 +296,11 @@ func realMembers(ms []arMember) []string {
 	var out []string
 	for _, m := range ms {
 		base := m.name
-		if i := strings.Index(base, "."); i > 0 {
-			// strip random middle suffixes: keep only the crate+hash
-			// head and the extension tail for classification
-		}
-		if strings.HasPrefix(base, "__.SYMDEF") || strings.HasSuffix(base, "-link") {
+		// Name-listing members whose bytes derive from the (random)
+		// member names: BSD symbol index (__.SYMDEF*), GNU symbol
+		// table ("/"), GNU name table ("//"), and rust's rmeta-link.
+		if strings.HasPrefix(base, "__.SYMDEF") || strings.HasSuffix(base, "-link") ||
+			base == "/" || base == "//" || base == "" {
 			continue
 		}
 		out = append(out, m.hash)
