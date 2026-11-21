@@ -19,6 +19,13 @@ on:
 
 permissions: {}
 
+env:
+  # The clone gains untracked files between phases (out/plain exists
+  # when phase 2 runs), and go embeds vcs.modified — a legitimately
+  # different binary per phase. Disable stamping for a deterministic
+  # demo; the cimemo buildinfo AUDIT reports exactly this class.
+  GOFLAGS: -buildvcs=false
+
 jobs:
   build:
     runs-on: ubuntu-latest
