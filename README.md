@@ -39,4 +39,8 @@ cimemo make           # hit
 cimemo record make    # discovers hidden inputs, writes config
 ```
 
-Full design notes, measured results, case studies: [SENSORS.md](SENSORS.md).
+Design notes: [docs/sensors.md](docs/sensors.md) ·
+[docs/certainty.md](docs/certainty.md) ·
+[docs/case-studies.md](docs/case-studies.md) ·
+[docs/positioning.md](docs/positioning.md) ·
+[docs/config.md](docs/config.md)
