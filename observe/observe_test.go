@@ -67,13 +67,27 @@ func TestTrackShortLivedProcess(t *testing.T) {
 }
 
 func TestFilesRelativeToWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	// The filter stats entries (dirs and dot-files are dropped), so
+	// the fixture must exist on disk.
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "file.go"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(dir, "sub", ".lock"), []byte("x"), 0o644)
+
+	// Files() relativizes against the SYMLINK-RESOLVED work dir
+	// (macOS /var → /private/var) — fixture paths must match.
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := NewReads()
 	r.mu.Lock()
-	r.files["/some/dir/sub/file.go"] = true
-	r.files["/other/place/file.go"] = true
+	r.files[filepath.Join(real, "sub", "file.go")] = true
+	r.files[filepath.Join(real, "sub", ".lock")] = true // dot-file: filtered
+	r.files[real] = true                                // directory: filtered
 	r.mu.Unlock()
 
-	rel := r.Files("/some/dir")
+	rel := r.Files(dir)
 	if len(rel) != 1 || rel[0] != "sub/file.go" {
 		t.Fatalf("expected [sub/file.go], got %v", rel)
 	}

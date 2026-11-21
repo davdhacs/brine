@@ -1,0 +1,85 @@
+name: integration
+
+# On-demand demo: build a popular project through cimemo and report
+# the cold-vs-receipt timing difference. No external services — the
+# receipt store is local to the runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "project to build (github URL)"
+        default: "https://github.com/prometheus/prometheus"
+      ref:
+        description: "commit/tag/branch (pinned for determinism)"
+        default: "v3.6.0"
+      package:
+        description: "go package to build"
+        default: "./cmd/prometheus"
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build -o /tmp/cimemo ./cmd/cimemo
+
+      - name: clone the target project (pinned)
+        run: |
+          git clone --quiet --depth 1 --branch "${{ inputs.ref }}" "${{ inputs.repo }}" /tmp/project
+          cd /tmp/project && git rev-parse HEAD
+
+      - name: phase 1 — plain cold build (baseline)
+        run: |
+          cd /tmp/project
+          rm -rf /tmp/gc && mkdir -p /tmp/gc
+          START=$(date +%s%3N)
+          GOCACHE=/tmp/gc go build -o /tmp/out-plain ${{ inputs.package }}
+          echo "PLAIN_COLD=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
+          sha256sum /tmp/out-plain | cut -d' ' -f1 > /tmp/sha-plain
+
+      - name: phase 2 — cimemo cold (builds + stores receipt)
+        run: |
+          cd /tmp/project
+          rm -rf /tmp/gc /tmp/out-cimemo && mkdir -p /tmp/gc
+          START=$(date +%s%3N)
+          GOCACHE=/tmp/gc /tmp/cimemo go build -o /tmp/out-cimemo ${{ inputs.package }} 2>&1 | tee /tmp/cimemo-cold.log
+          echo "CIMEMO_COLD=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
+          sha256sum /tmp/out-cimemo | cut -d' ' -f1 > /tmp/sha-cimemo
+
+      - name: phase 3 — cimemo receipt (outputs and go cache wiped)
+        run: |
+          cd /tmp/project
+          rm -rf /tmp/gc /tmp/out-cimemo && mkdir -p /tmp/gc
+          START=$(date +%s%3N)
+          GOCACHE=/tmp/gc /tmp/cimemo go build -o /tmp/out-cimemo ${{ inputs.package }} 2>&1 | tee /tmp/cimemo-receipt.log
+          echo "CIMEMO_RECEIPT=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
+
+      - name: verdict + summary
+        run: |
+          SHA_PLAIN=$(cat /tmp/sha-plain)
+          SHA_CIMEMO=$(sha256sum /tmp/out-cimemo | cut -d' ' -f1)
+          if [ "$SHA_PLAIN" = "$SHA_CIMEMO" ]; then VERDICT="byte-identical"; else VERDICT="MISMATCH"; fi
+          SPEEDUP=$(echo "scale=1; $PLAIN_COLD / $CIMEMO_RECEIPT" | bc)
+          {
+            echo "## cimemo integration — ${{ inputs.repo }} @ ${{ inputs.ref }}"
+            echo
+            echo "| phase | wall |"
+            echo "|---|---|"
+            echo "| plain cold build | ${PLAIN_COLD}ms |"
+            echo "| cimemo cold (build + store receipt) | ${CIMEMO_COLD}ms |"
+            echo "| cimemo receipt (cache + outputs wiped) | ${CIMEMO_RECEIPT}ms |"
+            echo
+            echo "Receipt vs plain build: **${VERDICT}** — speedup **${SPEEDUP}x**"
+            echo
+            echo '```'
+            grep -E "\[cimemo\]" /tmp/cimemo-receipt.log | head -5
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$VERDICT" = "byte-identical" ]
