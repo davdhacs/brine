@@ -109,6 +109,52 @@ flat-project gap, three parts:
 Divergence detector earned its keep here too: it flagged the empty
 receipt ("same closure, different outputs") before the fix.
 
+## Invisible inputs: the final architecture (2026-11-22)
+
+Question: can write-tracking observation replace the config/env
+mechanisms? Answer: no — each covers a disjoint blindness. Validated
+across three cases (fixtures in git history of this section):
+
+**A. config written OUTSIDE cimemo** (manual ./configure; cimemo make):
+config.h is an INPUT. Handled by the read-set (untracked-config
+patterns join git∪observed before the writes filter). Flip →
+"MISS: changed: config.h" → correct rebuild. Commit receipts are
+guarded: an untracked config on disk that the receipt does not
+produce (not a blob) skips the fast path.
+
+**B1. config generated IN-BUILD from TRACKED source** (make runs
+configure reading a committed flag): config.h is an OUTPUT whose
+content is a function of tracked inputs. The writes filter removes it
+from the read-set; the snapshot captures it; the receipt restores
+config.h + binary together (validated: wipe both → HIT → both
+restored, exec bit preserved). Flip the tracked flag → miss. Flip
+back → keyed hit (non-go commands gained a pre-build keyed check with
+stored-InputHashes verification).
+
+**B2. config generated IN-BUILD from ENV**: the output depends on
+something NO file sensor can observe. Without CIMEMO_KEY_ENV the
+receipt is stale (irreducible — this is where Bazel is strictly
+stronger: it sandboxes the environment, making undeclared env
+influence impossible; cimemo wraps existing builds and cannot
+sandbox). With CIMEMO_KEY_ENV=FEATURE: flip → "MISS: untracked config
+or key env changed" → correct rebuild; flip back → receipt hit.
+Honest caveat found en route: after the env-flip MISS, cimemo re-runs
+the build — but MAKE ITSELF may decline to rebuild (program: program.c
+has no env dependency; also make's same-second staleness). cimemo
+detects what it can see; the build system's own dependency
+declarations remain the floor below which nothing can help.
+
+Mechanism inventory (final):
+- WRITES (fsnotify during build): outputs — read∧written = output
+  (make freshness), created-in-op = generated input, immune to mtime
+  granularity. Best-effort (dir cap; mtime invariant is the fallback).
+- UNTRACKED CONFIGS → read-set (input when pre-existing; output when
+  generated — the writes filter is the disambiguator). NOT keyed:
+  keying a generated config conflicts with its output role.
+- CIMEMO_KEY_ENV / CIMEMO_KEY_FILES: irreducible opt-in declarations
+  for influence that flows through no file.
+- File mode (exec bit) now recorded per-blob and restored.
+
 ## Invisible inputs: untracked configs and env (2026-11-22)
 
 Found live (autotools-style fixture): `./configure --enable-foo` writes

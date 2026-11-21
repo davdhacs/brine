@@ -141,6 +141,26 @@ func cmdMemoize(args []string, forceFull bool) {
 
 	start := time.Now()
 
+	// Untracked config artifacts are candidate inputs — added to the
+	// read-set BEFORE the writes filter: a config the build generates
+	// gets removed by that filter (it is an output); a config written
+	// outside cimemo (manual ./configure) stays and is hashed like any
+	// input, catching config flips.
+	untrackedConfigs := func() []string {
+		var out []string
+		for _, pat := range []string{"config.h", "config.status", "CMakeCache.txt", "*.cmake", "local.mk", ".env"} {
+			if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
+				for _, f := range files {
+					if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
+						rel, _ := filepath.Rel(wd, f)
+						out = append(out, filepath.ToSlash(rel))
+					}
+				}
+			}
+		}
+		return out
+	}
+
 	// === Commit-receipt fast path ===
 	// A clean tree at HEAD is exactly determined: SHA → tree → closure.
 	// This skips `go list`, closure hashing, and (in CI) the module
@@ -151,13 +171,30 @@ func cmdMemoize(args []string, forceFull bool) {
 		keyCommand := command
 		if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd), toolchain); ok && st.HasManifest(ck) {
 			if m, err := st.GetManifest(ck); err == nil && len(m.Blobs) > 0 {
-				verifyRestored(m, wd)
-				if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
-					fmt.Printf("[cimemo] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
-					fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
-						count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
-					recordHit(mod, command)
-					return
+				// Commit receipts vouch for the TREE, not untracked
+				// configs: a config on disk that this receipt does not
+				// produce is a hidden input it cannot vouch for.
+				blobSet := map[string]bool{}
+				for _, b := range m.Blobs {
+					blobSet[b.Path] = true
+				}
+				skipFast := false
+				for _, cfg := range untrackedConfigs() {
+					if !blobSet[cfg] {
+						fmt.Printf("[cimemo] commit receipt skipped: untracked config %s is not produced by this receipt\n", cfg)
+						skipFast = true
+						break
+					}
+				}
+				if !skipFast {
+					verifyRestored(m, wd)
+					if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
+						fmt.Printf("[cimemo] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
+						fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
+							count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
+						recordHit(mod, command)
+						return
+					}
 				}
 			}
 		}
@@ -306,6 +343,57 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 	}
 
+	// Write tracking (non-go commands): fsnotify events give exact
+	// output semantics — read∧written = output (make freshness),
+	// created-during-op = generated input consumed later in the same
+	// invocation, immune to same-second mtime granularity.
+	var writes *observe.Writes
+	if !isGo {
+		writes = observe.NewWrites(wd)
+		defer writes.Close()
+	}
+
+	// Pre-build keyed check for non-go commands (the go path has its
+	// own, closure-based). Pre-build the read-set is git ∪ untracked
+	// configs — anything the build REgenerates is excluded from the
+	// STORED key (writes filter), so a leftover copy makes keys differ
+	// → miss → safe. Absent (wiped) → matches → hit.
+	if !isGo && !isDocker && !forceFull {
+		if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
+			candidates := unionFiles(gitFiles, untrackedConfigs())
+			if len(candidates) > 0 {
+				pk := key.FromFiles(wd, candidates, command+"|"+toolchain+vcsFold(wd)+keyTail(wd))
+				if st.HasManifest(pk) {
+					if m, err := st.GetManifest(pk); err == nil && len(m.Blobs) > 0 {
+						// The stored read-set may be a SUBSET (generated
+						// configs were filtered out at store time) — only
+						// trust the hit if the stored set matches the
+						// current candidate content.
+						match := true
+						for rel, want := range m.InputHashes {
+							if got, ok := key.HashInput(wd, rel); !ok || got != want {
+								match = false
+								break
+							}
+						}
+						if match {
+							count, bytes, err := st.RestoreManifest(m, wd)
+							if err == nil {
+								fmt.Printf("[cimemo] CACHE HIT (keyed): %s\n", pk)
+								fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
+									count, float64(bytes)/1024/1024,
+									time.Since(start).Round(time.Millisecond))
+								storeCommitReceiptIfClean(st, m, wd, command, toolchain)
+								recordHit(mod, command)
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// === Run the command ===
 	if forceFull {
 		fmt.Printf("[cimemo] audit: forcing full rebuild\n")
@@ -368,6 +456,26 @@ func cmdMemoize(args []string, forceFull bool) {
 		os.Remove(statsPath)
 	}
 
+	var writtenSet map[string]bool
+	if writes != nil && writes.Active() {
+		writtenSet = map[string]bool{}
+		for _, f := range writes.Files(wd) {
+			writtenSet[f] = true
+		}
+	}
+	filterWrites := func(files []string) []string {
+		if writtenSet == nil {
+			return files
+		}
+		var out []string
+		for _, f := range files {
+			if !writtenSet[f] {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+
 	// === Discover the read-set (non-Go commands) ===
 	if isDocker {
 		// The build context IS the input closure — including files
@@ -377,7 +485,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		readSet = dockerContextClosure(wd, args)
 		strategy = store.StrategyFallback
 	} else if !isGo {
-		if observed := filterBuildState(wd, reads.Files(wd), builtAt); len(observed) > 0 {
+		if observed := filterWrites(filterBuildState(wd, unionFiles(reads.Files(wd), untrackedConfigs()), builtAt)); len(observed) > 0 {
 			readSet = observed
 			strategy = store.StrategyObserved
 			// Orchestrator blindness: builds that delegate into
@@ -387,13 +495,13 @@ func cmdMemoize(args []string, forceFull bool) {
 			// git-tracked files so the key stays sound; observation
 			// then only ADDS precision when it catches real reads.
 			if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
-				readSet = unionFiles(readSet, gitFiles)
+				readSet = unionFiles(readSet, filterWrites(gitFiles))
 			}
 		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 			// Same build-write invariant: tracked files rewritten by
 			// the build (committed artifacts, make freshness targets)
 			// are outputs of this build, not inputs.
-			readSet = filterBuildState(wd, gitFiles, builtAt)
+			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs()), builtAt))
 			strategy = store.StrategyFallback
 		}
 	}

@@ -86,7 +86,11 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 		if err != nil {
 			return nil
 		}
-		m.Blobs = append(m.Blobs, BlobRef{Hash: hash, Path: rel, Size: size})
+		mode := uint32(info.Mode())
+		if mode == 0o644 {
+			mode = 0 // common case: omit
+		}
+		m.Blobs = append(m.Blobs, BlobRef{Hash: hash, Path: rel, Size: size, Mode: mode})
 		return nil
 	})
 	if err != nil {

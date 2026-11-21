@@ -221,12 +221,6 @@ func localDigest(image string) string {
 //
 // Each found config also AUDIT-warns: it is keyed, but it is not
 // shared (uncommitted) — pin it for team-wide determinism.
-var untrackedConfigPatterns = []string{
-	"config.h", "config.status", "config.log",
-	"CMakeCache.txt", "*.cmake",
-	"local.mk", "Makefile.local", "*.mk.local",
-	".env", ".env.local",
-}
 
 func keyTail(wd string) string {
 	var parts []string
@@ -257,17 +251,12 @@ func keyTail(wd string) string {
 		}
 	}
 
-	for _, pat := range untrackedConfigPatterns {
-		if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
-			for _, f := range files {
-				rel, _ := filepath.Rel(wd, f)
-				if v, ok := key.HashInput(wd, rel); ok {
-					parts = append(parts, "cfg:"+rel+"="+v)
-					fmt.Printf("[cimemo] AUDIT untracked-config: %s is keyed (uncommitted build config — commit it for shared determinism)\n", rel)
-				}
-			}
-		}
-	}
+	// Untracked-config patterns are NOT keyed here: a config the build
+	// GENERATES is an output (keying it conflicts — the stale-serve
+	// found in the generated-config case); a config written OUTSIDE
+	// cimemo belongs to the READ-SET, where the writes filter
+	// disambiguates. Env and user globs stay keyed: env influences
+	// builds through no file any sensor can observe.
 
 	if len(parts) == 0 {
 		return ""

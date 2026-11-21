@@ -36,9 +36,10 @@ type ImageRef struct {
 
 // BlobRef is a reference to a stored blob.
 type BlobRef struct {
-	Hash string `json:"hash"` // SHA-256 of content
-	Path string `json:"path"` // relative path for restoration
-	Size int64  `json:"size"` // content size in bytes
+	Hash string `json:"hash"`           // SHA-256 of content
+	Path string `json:"path"`           // relative path for restoration
+	Size int64  `json:"size"`           // content size in bytes
+	Mode uint32 `json:"mode,omitempty"` // file mode (exec bit survives restore)
 }
 
 // Manifest maps a cache key to a set of output blobs.
@@ -246,6 +247,9 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 		if m.BuiltAt > 0 {
 			t := time.Unix(0, m.BuiltAt)
 			os.Chtimes(target, t, t)
+		}
+		if ref.Mode != 0 {
+			os.Chmod(target, os.FileMode(ref.Mode))
 		}
 		count++
 		total += int64(len(data))
