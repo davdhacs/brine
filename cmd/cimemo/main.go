@@ -83,6 +83,12 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "graph":
+		st, err := store.New(filepath.Join(mustWd(), ".cimemo"))
+		if err != nil {
+			fatal("store: %v", err)
+		}
+		PrintGraph(BuildCommandGraph(st))
 	case args[0] == "record" && len(args) > 1:
 		cmdRecord(args[1:])
 	case args[0] == "dissect" && len(args) == 3:
@@ -329,6 +335,14 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 	}
 
+	// Auto-configure protocol caches (ccache for C/C++, sccache for
+	// Rust): closes the changed-input-cold-machine gap for the top
+	// three languages alongside GOCACHEPROG for Go.
+	pc := detectProtocolCache(wd, args)
+	if pc != nil {
+		fmt.Printf("[cimemo] protocol-cache: %s configured\n", pc.Tool)
+	}
+
 	// Write tracking (non-go commands): fsnotify events give exact
 	// output semantics — read∧written = output (make freshness),
 	// created-during-op = generated input consumed later in the same
@@ -410,6 +424,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 	}
 
+	applyProtocolCache(cmd, pc)
 	if err := cmd.Start(); err != nil {
 		fatal("start: %v", err)
 	}
@@ -619,6 +634,18 @@ func cmdMemoize(args []string, forceFull bool) {
 	for _, f := range pinaudit.Audit(wd) {
 		fmt.Printf("[cimemo] AUDIT %s (%s): %s\n", f.Kind, f.File, f.Detail)
 		fmt.Printf("[cimemo]   warn: %s\n", f.Warning)
+	}
+
+	// Cross-command dependency graph: if this command's outputs feed
+	// other commands, their receipts are now stale — name them.
+	if !isDocker {
+		edges := BuildCommandGraph(st)
+		if dependents := InvalidateDependents(edges, command); len(dependents) > 0 {
+			fmt.Printf("[cimemo] graph: %d dependent command(s) invalidated:\n", len(dependents))
+			for _, dep := range dependents {
+				fmt.Printf("[cimemo]   %s\n", shortCmd(dep))
+			}
+		}
 	}
 
 	fmt.Printf("[cimemo] CACHED: %s\n", k)
@@ -890,17 +917,31 @@ func vcsFoldActive() bool {
 	return loadConfig(".").BuildVCS != "off"
 }
 
-// untrackedConfigs finds config artifacts that may be build inputs.
+// untrackedConfigs finds config artifacts that may be build inputs:
+// built-in patterns PLUS the user's declared key_files (which must be
+// in the read-set for the cross-command graph to see the dependency).
 func untrackedConfigs(wd string) []string {
 	var out []string
+	seen := map[string]bool{}
+	add := func(rel string) {
+		if !seen[rel] {
+			seen[rel] = true
+			out = append(out, rel)
+		}
+	}
 	for _, pat := range []string{"config.h", "config.status", "CMakeCache.txt", "*.cmake", "local.mk", ".env"} {
 		if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
 			for _, f := range files {
 				if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
 					rel, _ := filepath.Rel(wd, f)
-					out = append(out, filepath.ToSlash(rel))
+					add(filepath.ToSlash(rel))
 				}
 			}
+		}
+	}
+	for _, f := range loadConfig(wd).KeyFiles {
+		if _, err := os.Stat(filepath.Join(wd, f)); err == nil {
+			add(f)
 		}
 	}
 	return out
@@ -1116,6 +1157,11 @@ func cmdRecord(args []string) {
 	}
 	writesActive := writes != nil && writes.Active()
 
+	pc := detectProtocolCache(wd, args)
+	if pc != nil {
+		fmt.Printf("[cimemo] record: protocol-cache %s configured\n", pc.Tool)
+	}
+
 	reads := observe.NewReads()
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdin = os.Stdin
@@ -1130,6 +1176,8 @@ func cmdRecord(args []string) {
 				"CIMEMO_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
 		}
 	}
+	applyProtocolCache(cmd, pc)
+	applyProtocolCache(cmd, pc)
 	if err := cmd.Start(); err != nil {
 		fatal("start: %v", err)
 	}

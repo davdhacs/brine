@@ -186,3 +186,25 @@ func (s *Store) LatestForClosure(closureHash, excludeKey string) *Manifest {
 	}
 	return best
 }
+
+// AllManifests returns all stored manifests as raw maps (for the
+// cross-command dependency graph).
+func (s *Store) AllManifests() []map[string]interface{} {
+	var out []map[string]interface{}
+	manifestDir := filepath.Join(s.root, "manifests")
+	entries, _ := os.ReadDir(manifestDir)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(manifestDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(data, &m) == nil && m["command"] != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
