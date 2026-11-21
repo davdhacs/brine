@@ -149,7 +149,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// no commit receipt exists.
 	if !forceFull && !isDocker {
 		keyCommand := command
-		if ck, ok := commitReceiptKey(wd, keyCommand, toolchain); ok && st.HasManifest(ck) {
+		if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd), toolchain); ok && st.HasManifest(ck) {
 			if m, err := st.GetManifest(ck); err == nil && len(m.Blobs) > 0 {
 				verifyRestored(m, wd)
 				if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
@@ -166,10 +166,18 @@ func cmdMemoize(args []string, forceFull bool) {
 	// === Warm path (skipped for audit / shadow: both build fully) ===
 	if !forceFull {
 		if m := st.LatestManifestForCommand(command); m != nil {
+			// Invisible-input classes (untracked configs, key env) are
+			// not in the read-set — the warm path must compare the
+			// recorded tail explicitly or it serves stale receipts
+			// across config flips.
+			tailNow := keyTail(wd)
 			toolchainOK := !isGo || m.Toolchain == toolchain
+			tailOK := m.KeyTail == tailNow
 			vcsOK := !isGo || !vcsFoldActive() || m.VCSCommit == gitHead(wd)
 			if !toolchainOK {
 				fmt.Printf("[cimemo] MISS: toolchain changed\n")
+			} else if !tailOK {
+				fmt.Printf("[cimemo] MISS: untracked config or key env changed\n")
 			} else if !vcsOK {
 				fmt.Printf("[cimemo] MISS: commit changed (VCS-stamped build)\n")
 			} else if valid, reasons := st.Validate(m, wd); valid {
@@ -214,7 +222,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// restoring files.
 	if isDocker && !forceFull {
 		if ctxFiles := dockerContextClosure(wd, args); len(ctxFiles) > 0 {
-			dk := key.FromFiles(wd, ctxFiles, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+dockerKeyExtras(wd, args))
+			dk := key.FromFiles(wd, ctxFiles, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd)+dockerKeyExtras(wd, args))
 			if st.HasManifest(dk) {
 				if m, err := st.GetManifest(dk); err == nil && len(m.ImageOutputs) > 0 {
 					allOK := true
@@ -255,7 +263,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			runPlain(args)
 			return
 		}
-		k := key.FromFiles(wd, readSet, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd))
+		k := key.FromFiles(wd, readSet, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd))
 		if !forceFull && st.HasManifest(k) {
 			if m, err := st.GetManifest(k); err == nil {
 				count, bytes, err := st.RestoreManifest(m, wd)
@@ -407,7 +415,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 		extras = dockerKeyExtras(wd, args)
 	}
-	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+extras)
+	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd)+extras)
 	var m *store.Manifest
 	if isDocker {
 		// Image-level receipt: outputs are image IDs, not files.
@@ -455,6 +463,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	m.BuiltAt = builtAt
 	m.ActionStats = actionStats
 	m.VCSCommit = gitHead(wd)
+	m.KeyTail = keyTail(wd)
 	m.ClosureHash = key.ClosureHash(wd, readSet)
 
 	// Nondeterminism detector: same closure, different key or different
@@ -539,7 +548,7 @@ func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyComman
 	if m.KeyKind != "" {
 		return // already an alias
 	}
-	if ck, ok := commitReceiptKey(wd, keyCommand, toolchain); ok {
+	if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd), toolchain); ok {
 		cm := *m
 		cm.Key = ck
 		cm.KeyKind = "commit"

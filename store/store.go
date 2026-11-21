@@ -66,6 +66,7 @@ type Manifest struct {
 	ImageOutputs []ImageRef        `json:"image_outputs,omitempty"`
 	KeyKind      string            `json:"key_kind,omitempty"` // "content" (default) | "commit"
 	ClosureHash  string            `json:"closure_hash,omitempty"`
+	KeyTail      string            `json:"key_tail,omitempty"`
 }
 
 // Store is the content-addressed blob store with manifests.

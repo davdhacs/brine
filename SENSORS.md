@@ -109,6 +109,35 @@ flat-project gap, three parts:
 Divergence detector earned its keep here too: it flagged the empty
 receipt ("same closure, different outputs") before the fix.
 
+## Invisible inputs: untracked configs and env (2026-11-22)
+
+Found live (autotools-style fixture): `./configure --enable-foo` writes
+config.h into the source tree — UNTRACKED (often gitignored), existing
+before the build (not a build-write), invisible to git-based keys.
+Worse: git diff-index ignores untracked files, so even COMMIT receipts
+("clean tree at HEAD") say nothing about config.h. Result before the
+fix: flip the config, receipt HIT, WRONG-CONFIGURATION BINARY SERVED —
+a stale serve, not a post-hoc divergence.
+
+Fix — keyTail folds invisible input classes into EVERY key (fast path,
+keyed, commit, warm-comparison, docker):
+1. untracked config artifacts (config.h, config.status, CMakeCache.txt,
+   *.cmake, local.mk, .env...) — hashed + AUDIT-warned ("keyed, but
+   uncommitted — commit it for shared determinism")
+2. CIMEMO_KEY_ENV="CFLAGS,CXXFLAGS,..." — named env vars folded in
+   (env changes output without changing any file)
+3. CIMEMO_KEY_FILES="*.conf" — user escape hatch for anything else
+
+The warm path needed its own guard: it validates the read-set without
+recomputing keys, so the tail is stored on the manifest (KeyTail) and
+compared — mismatch = "MISS: untracked config or key env changed".
+
+Validated: config flip → MISS → correct rebuild; flip back → receipt
+HIT; env flip → MISS. Also observed en passant: make's own same-second
+staleness (dependency rewritten within the same second as the target =
+"up to date") — cimemo inherits the build system's granularity for
+rebuilds, but the keyed path is content-hashed and immune to it.
+
 ## Positioning: cimemo vs Bazel (2026-11-22)
 
 Bazel/Buck2 solve the key-closure problem by CONSTRUCTION: explicit

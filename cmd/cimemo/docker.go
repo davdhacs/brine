@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/davdhacs/cimemo/key"
 )
 
 // dockerBuildTags extracts -t/--tag values from a docker/buildx build
@@ -203,4 +205,72 @@ func localDigest(image string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// keyTail folds every INPUT CLASS INVISIBLE TO GIT-BASED KEYS into one
+// key fragment:
+//
+//  1. env vars named in CIMEMO_KEY_ENV ("CFLAGS,CXXFLAGS,...") — env
+//     changes output without changing any file
+//  2. files matching CIMEMO_KEY_FILES globs — user escape hatch
+//  3. UNTRACKED CONFIG ARTIFACTS (config.h written by ./configure,
+//     CMakeCache.txt outside build dirs, local.mk, .env) — autotools
+//     convention puts build config in untracked source-tree files;
+//     git-based keys and commit receipts are blind to them (a clean
+//     tree at HEAD says nothing about config.h)
+//
+// Each found config also AUDIT-warns: it is keyed, but it is not
+// shared (uncommitted) — pin it for team-wide determinism.
+var untrackedConfigPatterns = []string{
+	"config.h", "config.status", "config.log",
+	"CMakeCache.txt", "*.cmake",
+	"local.mk", "Makefile.local", "*.mk.local",
+	".env", ".env.local",
+}
+
+func keyTail(wd string) string {
+	var parts []string
+
+	if vars := os.Getenv("CIMEMO_KEY_ENV"); vars != "" {
+		for _, name := range strings.Split(vars, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			parts = append(parts, "env:"+name+"="+os.Getenv(name))
+		}
+	}
+
+	if globs := os.Getenv("CIMEMO_KEY_FILES"); globs != "" {
+		for _, g := range strings.Split(globs, ",") {
+			g = strings.TrimSpace(g)
+			if g == "" {
+				continue
+			}
+			if files, _ := filepath.Glob(filepath.Join(wd, g)); len(files) > 0 {
+				for _, f := range files {
+					if v, ok := key.HashInput(wd, filepath.Base(f)); ok {
+						parts = append(parts, "file:"+filepath.Base(f)+"="+v)
+					}
+				}
+			}
+		}
+	}
+
+	for _, pat := range untrackedConfigPatterns {
+		if files, _ := filepath.Glob(filepath.Join(wd, pat)); len(files) > 0 {
+			for _, f := range files {
+				rel, _ := filepath.Rel(wd, f)
+				if v, ok := key.HashInput(wd, rel); ok {
+					parts = append(parts, "cfg:"+rel+"="+v)
+					fmt.Printf("[cimemo] AUDIT untracked-config: %s is keyed (uncommitted build config — commit it for shared determinism)\n", rel)
+				}
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return "|tail:" + strings.Join(parts, "\x00")
 }
