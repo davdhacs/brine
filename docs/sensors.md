@@ -21,7 +21,7 @@ this command depend on?" with a different soundness/cost profile.
 |---|--------|------|--------|
 | 7 | compiler dep-files (gcc/clang `-MD`, rustc `dep-info`) | exact | stub in `sensor/sensor.go`; needs a C/C++ case study that generates .d files |
 | 8 | dry-run/verbose traces (`make -n`, `tsc --listFiles`) | exact | stub; needs a Makefile-based project |
-| 10 | coverage profiles (test selection) | exact | stub; needs a test-selection case study |
+| ~~10~~ | ~~coverage profiles (test selection)~~ | — | **out of scope**: selection changes what runs (a prediction); cimemo memoizes what ran (deterministic). Coverage data may feed closure discovery; the selection logic is a different tool. |
 | 11 | git history mining (seed model from co-changes) | statistical | stub |
 | 12 | BuildKit/Docker layer provenance | exact | docker image receipts exist; layer-level provenance is the deeper form |
 

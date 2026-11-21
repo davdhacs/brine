@@ -119,12 +119,14 @@ func CacheProtocol(dir string) (Reading, error) {
 
 // Coverage discovers test→code mappings for test-selection memoization.
 //
-// TODO(sensor #10): `go test -coverprofile` (and jest/vitest coverage)
-// maps each test to the code it exercises — the closure for "which
-// tests must re-run for this change". Exact, already produced by most
-// CI. Needs a test-selection case study to exercise.
+// Coverage-based test SELECTION is out of scope for cimemo: it
+// predicts which tests are unaffected and skips them — a behavioral
+// change with a false-confidence risk. cimemo memoizes what ran;
+// it does not choose what to run. Coverage data may still be useful
+// for closure discovery (what code a test reads), but the selection
+// logic is a separate tool.
 func Coverage(dir string) (Reading, error) {
-	return Reading{}, fmt.Errorf("coverage sensor: not implemented (test-selection case study)")
+	return Reading{}, fmt.Errorf("coverage sensor: out of scope (selection ≠ memoization)")
 }
 
 // GitHistory seeds the learned model from commit co-change statistics.
