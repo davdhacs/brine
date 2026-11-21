@@ -547,9 +547,30 @@ func cmdMemoize(args []string, forceFull bool) {
 	}
 	for _, d := range m.OutputDirs {
 		outputDirs[d] = true
+		// also exclude all ANCESTORS of output dirs: "target/debug"
+		// implies "target" must be excluded from the root listing too
+		// (it was created by a PREVIOUS build, so its own mtime is old
+		// and the walk doesn't record it — found via zed, where wiping
+		// target/ invalidated the root listing)
+		for p := d; ; {
+			if i := strings.LastIndexByte(p, '/'); i > 0 {
+				p = p[:i]
+				outputDirs[p] = true
+			} else {
+				break
+			}
+		}
 	}
 	for _, b := range m.Blobs {
 		outputDirs[b.Path] = true // flat projects: root-level output files
+		for p := b.Path; ; {
+			if i := strings.LastIndexByte(p, '/'); i > 0 {
+				p = p[:i]
+				outputDirs[p] = true
+			} else {
+				break
+			}
+		}
 	}
 	m.InputHashes, m.DirListings = store.BuildProvenanceFiltered(wd, readSet, outputDirs)
 	m.Closure = closure

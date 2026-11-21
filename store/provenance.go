@@ -163,6 +163,15 @@ func (s *Store) Validate(m *Manifest, dir string) (bool, []string) {
 	}
 	for _, d := range m.OutputDirs {
 		outputRoots[d] = true
+		// ancestors too (target/debug implies target — see cmd side)
+		for p := d; ; {
+			if i := strings.LastIndexByte(p, '/'); i > 0 {
+				p = p[:i]
+				outputRoots[p] = true
+			} else {
+				break
+			}
+		}
 	}
 	// Also exclude output FILES at any level (flat projects: make
 	// writes .o next to sources; wiping them must not invalidate).
