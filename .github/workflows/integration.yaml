@@ -70,6 +70,7 @@ jobs:
 
       - name: verdict + summary
         run: |
+          cd /tmp/project
           SHA_PLAIN=$(cat /tmp/sha-plain)
           SHA_CIMEMO=$(sha256sum out/cimemo | cut -d' ' -f1)
           if [ "$SHA_PLAIN" = "$SHA_CIMEMO" ]; then VERDICT="byte-identical"; else VERDICT="MISMATCH"; fi
