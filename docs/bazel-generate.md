@@ -49,21 +49,38 @@ Known gazelle-side issues observed during generation (not brine bugs):
 newer stdlib packages (`testing/synctest`) crash gazelle v0.53's module
 resolution — fixed upstream after v0.53.
 
-## Parity loop (in progress)
+## Parity loop
 
-k8swatch end-to-end: gazelle-generated BUILD files + bzlmod MODULE.bazel
-(`bazel_dep` with `repo_name = "io_bazel_rules_go"` for the legacy label
-convention, `go_sdk.download`, gazelle `go_deps.from_file`, then
-`bazel mod tidy` to fix the use_repo list) builds with Bazel: 127 actions,
-63s. `brine bazel-generate` automates the generation; the MODULE.bazel
-wiring is currently manual (documented recipe).
+`brine bazel-generate --parity //cmd/kwtest` proves the Bazel build
+compiles the same machine code as `go build`:
 
-Binary parity: `go build` and `bazel build` produce the same program
-under the same toolchain (go1.27.4), but not the same bytes — rules_go
-does not embed module buildinfo (11.5MB vs 7.8MB binary). Parity
-comparison therefore needs normalization (strip buildinfo/DWARF, compare
-code sections); the normalization spec is being derived from measured
-section diffs.
+1. `go build -trimpath -ldflags="-s -w -buildid=redacted"` — flags
+   matched to rules_go (`-buildid=redacted` discovered via
+   `bazel aquery`; rules_go passes it literally).
+2. `bazel build` the target.
+3. Extract `__text`/`.text` from both and compare word-by-word. Every
+   differing word must be an address-forming immediate (ADRP page,
+   ADD/SUB imm12, LDR/STR offset) — rules_go's longer path strings make
+   gopclntab ~11.6KB larger, shifting later sections and every address
+   immediate with them.
+
+Measured on k8swatch (darwin/arm64): 23,929 differing words, 100%
+explained by address immediates, zero unexplained — the instruction
+streams are identical. The gate fails on real differences (different
+code, flags, or sources) and conservatively fails on function
+reordering (word-aligned comparison cannot prove equivalence across
+permutations). Adversarially validated: removing a src that survives
+dead-code elimination passes parity (correctly — the final code is
+identical) while the go-list validator still flags the under-declaration;
+`--fix` repairs it in sorted position to keep gazelle's canonical
+ordering stable.
+
+MODULE.bazel wiring is automated: `brine bazel-generate` writes the full
+bzlmod module (rules_go with `repo_name = "io_bazel_rules_go"` for
+gazelle's legacy labels, `go_sdk.download` matching the local toolchain,
+gazelle `go_deps.from_file`) and runs `bazel mod tidy` to fill the
+use_repo list. Fresh clone → one command → `bazel build` succeeds
+(k8swatch: 121 actions, 43.5s cold).
 
 ## Fidelity experiment: cel-go
 

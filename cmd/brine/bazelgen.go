@@ -85,6 +85,13 @@ func cmdBazelGenerate(args []string) {
 			fix = true
 		case "--excludes":
 			excludes = true
+		case "--parity":
+			i++
+			if i >= len(args) {
+				fatal("bazel-generate: --parity needs a target (e.g. --parity //cmd/kwtest)")
+			}
+			cmdBazelParity(args[i])
+			return
 		case "--gazelle":
 			i++
 			if i < len(args) {
@@ -594,11 +601,27 @@ func addToListAttr(path, ruleKind, attr, value string) bool {
 		writeLines(path, newLines)
 		return true
 	}
-	// multi-line: insert `    "value",` after the attr opening line
-	item := fmt.Sprintf("    %q,", value)
-	newLines := append([]string{}, lines[:attrLine+1]...)
+	// multi-line: insert at the sorted position — gazelle emits srcs/deps in
+	// sorted order, and preserving that order keeps compile order (and thus
+	// function layout in the linked binary) stable across gazelle re-runs
+	// and parity comparison.
+	item := fmt.Sprintf("        %q,", value) // gazelle indents list items 8 spaces
+	insertAt := attrLine + 1
+	for i := attrLine + 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "]" || t == "]," {
+			break
+		}
+		existing := unquote(t)
+		if existing != "" && existing > value {
+			insertAt = i
+			break
+		}
+		insertAt = i + 1
+	}
+	newLines := append([]string{}, lines[:insertAt]...)
 	newLines = append(newLines, item)
-	newLines = append(newLines, lines[attrLine+1:]...)
+	newLines = append(newLines, lines[insertAt:]...)
 	writeLines(path, newLines)
 	return true
 }
