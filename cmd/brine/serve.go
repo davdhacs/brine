@@ -10,12 +10,13 @@
 //	any tool that can GET/PUT a URL
 //
 // Key formats, two classes:
-//   - sha256 keys (64 lowercase hex): content-addressed — the key pins the
-//     content, verified by construction on every GET and enforced on PUT.
-//   - opaque keys (ccache's sha1 xx/rest layout, sccache, Bazel action keys):
-//     stored with a sha256 envelope (32-byte hash prefix prepended to the
-//     body), verified on every fetch. Corruption or tampering self-heals as
-//     a miss.
+//   - content-addressed keys (bare 64-hex sha256, or Bazel's cas/<sha256>):
+//     the key pins the content, verified by construction on every GET and
+//     enforced on PUT — key substitution is cryptographically impossible.
+//   - opaque keys (ccache's sha1 xx/rest layout, sccache, Bazel ac/<hash>
+//     action entries): stored with a sha256 envelope (32-byte hash prefix
+//     prepended to the body), verified on every fetch. Corruption or
+//     tampering self-heals as a miss.
 //
 // Value-adds over a raw blob store:
 //   - integrity verification on every GET (both key classes)
@@ -40,6 +41,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,6 +60,7 @@ type CacheServer struct {
 	remote  *gocache.Remote
 	port    int
 	token   string
+	verbose bool // BRINE_SERVE_LOG=1: log every request
 	started time.Time
 
 	// metrics
@@ -79,16 +82,25 @@ func NewCacheServer(port int, token string) *CacheServer {
 		remote:  remote,
 		port:    port,
 		token:   token,
+		verbose: os.Getenv("BRINE_SERVE_LOG") == "1",
 		started: time.Now(),
 	}
 }
 
 // Start runs the HTTP server until interrupted.
 func (s *CacheServer) Start() error {
+	logReq := func(name string, h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.verbose {
+				fmt.Printf("[brine] %s %s\n", r.Method, r.URL.Path)
+			}
+			h(w, r)
+		}
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleCache)
-	mux.HandleFunc("/stats", s.handleStats)
-	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/", logReq("cache", s.handleCache))
+	mux.HandleFunc("/stats", logReq("stats", s.handleStats))
+	mux.HandleFunc("/health", logReq("health", s.handleHealth))
 
 	addr := fmt.Sprintf(":%d", s.port)
 	fmt.Printf("[brine] serve: listening on %s (remote cache for ccache/sccache/any HTTP client)\n", addr)
@@ -145,21 +157,43 @@ func (s *CacheServer) handleCache(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// isSHA256Key reports whether the key is a bare sha256 hex digest, in which
-// case the key itself pins the content (content-addressed mode). Other key
-// formats (ccache's blake2b keys, sccache, Bazel action keys) are opaque and
-// use the envelope format: 32-byte sha256(body) prefix prepended to the body.
-func isSHA256Key(key string) bool {
-	if len(key) != 64 {
+// isSHA256Hex reports whether s is a bare lowercase sha256 hex digest.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
 		return false
 	}
-	for _, c := range key {
+	for _, c := range s {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
 			return false
 		}
 	}
 	return true
 }
+
+// contentHash extracts the sha256 a content-addressed key pins, or "".
+// Two shapes: a bare 64-hex digest, or Bazel's CAS layout "cas/<64-hex>"
+// (REAPI: CAS keys are sha256 of the content by construction). Bazel's
+// "ac/<hash>" action keys are NOT content-addressed (the hash is of the
+// action, not the entry) and stay in envelope mode; ac entries only carry
+// digests pointing into CAS, so even a poisoned ac entry self-heals when
+// Bazel verifies the referenced CAS blobs.
+func contentHash(key string) string {
+	if isSHA256Hex(key) {
+		return key
+	}
+	if strings.HasPrefix(key, "cas/") && isSHA256Hex(strings.TrimPrefix(key, "cas/")) {
+		return strings.TrimPrefix(key, "cas/")
+	}
+	return ""
+}
+
+// isSHA256Key kept for compatibility with tests.
+func isSHA256Key(key string) bool {
+	return isSHA256Hex(key)
+}
+
+// errHashMismatch marks a PUT whose body does not hash to its content-addressed key.
+var errHashMismatch = errors.New("body hash does not match key")
 
 // envelopeBody wraps body with its sha256 for opaque-key storage.
 func envelopeBody(body []byte) []byte {
@@ -191,16 +225,21 @@ func (s *CacheServer) handleGet(w http.ResponseWriter, r *http.Request, key stri
 	}
 
 	var body []byte
-	if isSHA256Key(strings.ReplaceAll(key, "/", "")) {
-		// Content-addressed key: the key pins the content.
+	if want := contentHash(key); want != "" {
+		// Content-addressed key: the key pins the content by construction.
 		sum := sha256.Sum256(blob)
-		if hex.EncodeToString(sum[:]) != strings.ReplaceAll(key, "/", "") {
+		if hex.EncodeToString(sum[:]) == want {
+			body = blob
+		} else if legacy := verifyEnvelope(blob); legacy != nil {
+			// Entry stored before direct CAS verification — envelope still
+			// guards storage integrity.
+			body = legacy
+		} else {
 			s.misses.Add(1)
 			fmt.Fprintf(os.Stderr, "[brine] INTEGRITY: GET %s: content hash mismatch\n", key[:12])
 			http.Error(w, "not found", http.StatusNotFound) // self-heal: client recompiles
 			return
 		}
-		body = blob
 	} else {
 		// Opaque key: sha256 envelope, verified on every fetch.
 		body = verifyEnvelope(blob)
@@ -227,24 +266,29 @@ func (s *CacheServer) handlePut(w http.ResponseWriter, r *http.Request, key stri
 		return
 	}
 
-	if isSHA256Key(strings.ReplaceAll(key, "/", "")) {
-		// Content-addressed key: the key must pin the content.
-		sum := sha256.Sum256(body)
-		if hex.EncodeToString(sum[:]) != strings.ReplaceAll(key, "/", "") {
-			fmt.Fprintf(os.Stderr, "[brine] INTEGRITY: PUT %s: content hash mismatch — rejected\n", key[:12])
+	store := func(blob []byte) error {
+		if want := contentHash(key); want != "" {
+			// Content-addressed key: the key must pin the content.
+			sum := sha256.Sum256(blob)
+			if hex.EncodeToString(sum[:]) != want {
+				fmt.Fprintf(os.Stderr, "[brine] INTEGRITY: PUT %s: content hash mismatch — rejected\n", key[:12])
+				return errHashMismatch
+			}
+			_, err := s.remote.PutIfNotExistPub(key, blob)
+			return err
+		}
+		// Opaque key: store with sha256 envelope for fetch-time verification.
+		_, err := s.remote.PutIfNotExistPub(key, envelopeBody(blob))
+		return err
+	}
+	if err := store(body); err != nil {
+		if err == errHashMismatch {
 			http.Error(w, "hash mismatch", http.StatusBadRequest)
 			return
 		}
-		if _, err := s.remote.PutIfNotExistPub(key, body); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// Opaque key: store with sha256 envelope for fetch-time verification.
-		if _, err := s.remote.PutIfNotExistPub(key, envelopeBody(body)); err != nil {
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
+		fmt.Fprintf(os.Stderr, "[brine] STORE ERROR: PUT %s: %v\n", key[:12], err)
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
 	}
 
 	s.puts.Add(1)
