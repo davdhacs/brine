@@ -49,6 +49,47 @@ Known gazelle-side issues observed during generation (not brine bugs):
 newer stdlib packages (`testing/synctest`) crash gazelle v0.53's module
 resolution — fixed upstream after v0.53.
 
+## Parity loop (in progress)
+
+k8swatch end-to-end: gazelle-generated BUILD files + bzlmod MODULE.bazel
+(`bazel_dep` with `repo_name = "io_bazel_rules_go"` for the legacy label
+convention, `go_sdk.download`, gazelle `go_deps.from_file`, then
+`bazel mod tidy` to fix the use_repo list) builds with Bazel: 127 actions,
+63s. `brine bazel-generate` automates the generation; the MODULE.bazel
+wiring is currently manual (documented recipe).
+
+Binary parity: `go build` and `bazel build` produce the same program
+under the same toolchain (go1.27.4), but not the same bytes — rules_go
+does not embed module buildinfo (11.5MB vs 7.8MB binary). Parity
+comparison therefore needs normalization (strip buildinfo/DWARF, compare
+code sections); the normalization spec is being derived from measured
+section diffs.
+
+## Fidelity experiment: cel-go
+
+Method: take a project with hand/gazelle-maintained BUILD files, delete
+them, regenerate with brine+gazelle, compare. cel-go (42 BUILD files,
+project uses gazelle itself with hand-written directives) gives:
+
+| class | dirs | note |
+|---|---|---|
+| structurally identical | 26 (63%) | same rules, srcs, deps |
+| label convention only | 10 (24%) | `:go_default_library` (their older gazelle) vs `:pkg` (bzlmod era) — semantically the same targets |
+| proto granularity | 2 (5%) | 3 proto_library rules vs 1 — both valid |
+| real gaps | 3 (7%) | `tags = ["manual", "notap"]` exclusion markers, one empty dir |
+
+~87% semantically equivalent. The real gaps are exactly the human
+knowledge encoded in directives — which dirs not to build. That
+knowledge is recoverable by observation: dirs never read during observed
+builds are the excludes. This is the observation-vs-declaration thesis
+in miniature: declaration encodes what humans know; observation
+discovers what builds actually do.
+
+Landscape note: many modern Go projects (google/go-cmp, google/uuid)
+carry no BUILD files at all — either no Bazel or generation at build
+time — so regeneration-from-source is the only path to a Bazel setup
+for them.
+
 ## Positioning
 
 Composition, not competition: gazelle owns static generation for
