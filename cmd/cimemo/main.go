@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/davdhacs/cimemo/buildinfo"
+	"github.com/davdhacs/cimemo/depfiles"
 	"github.com/davdhacs/cimemo/dissect"
 	"github.com/davdhacs/cimemo/gocache"
 	"github.com/davdhacs/cimemo/key"
@@ -473,6 +474,20 @@ func cmdMemoize(args []string, forceFull bool) {
 		return out
 	}
 
+	// Dep-files sensor (#7): if the build produced .d files (gcc/clang
+	// -MD), parse them for the exact C/C++ closure — headers the
+	// compiler actually included, not just what git tracks.
+	var depFileClosure []string
+	if !isGo && !isDocker {
+		if found := depfiles.Find(wd); len(found) > 0 {
+			depFileClosure = depfiles.Closure(wd)
+			if len(depFileClosure) > 0 {
+				fmt.Printf("[cimemo] dep-files: %d .d files → %d exact dependencies\n",
+					len(found), len(depFileClosure))
+			}
+		}
+	}
+
 	// === Discover the read-set (non-Go commands) ===
 	if isDocker {
 		// The build context IS the input closure — including files
@@ -482,7 +497,11 @@ func cmdMemoize(args []string, forceFull bool) {
 		readSet = dockerContextClosure(wd, args)
 		strategy = store.StrategyFallback
 	} else if !isGo {
-		if observed := filterWrites(filterBuildState(wd, unionFiles(reads.Files(wd), untrackedConfigs(wd)), builtAt)); len(observed) > 0 {
+		candidates := unionFiles(reads.Files(wd), untrackedConfigs(wd))
+		if len(depFileClosure) > 0 {
+			candidates = unionFiles(candidates, depFileClosure)
+		}
+		if observed := filterWrites(filterBuildState(wd, candidates, builtAt)); len(observed) > 0 {
 			readSet = observed
 			strategy = store.StrategyObserved
 			// Orchestrator blindness: builds that delegate into
@@ -498,8 +517,19 @@ func cmdMemoize(args []string, forceFull bool) {
 			// Same build-write invariant: tracked files rewritten by
 			// the build (committed artifacts, make freshness targets)
 			// are outputs of this build, not inputs.
-			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs(wd)), builtAt))
-			strategy = store.StrategyFallback
+			all := unionFiles(gitFiles, untrackedConfigs(wd))
+			if len(depFileClosure) > 0 {
+				all = unionFiles(all, depFileClosure)
+				// dep-files give header-level precision — mark as
+				// dep-files strategy when it's the primary source
+				if len(depFileClosure) > len(gitFiles)/2 {
+					strategy = "dep-files"
+				}
+			}
+			readSet = filterWrites(filterBuildState(wd, all, builtAt))
+			if strategy != "dep-files" {
+				strategy = store.StrategyFallback
+			}
 		}
 	}
 	if len(readSet) == 0 {
