@@ -84,11 +84,7 @@ func main() {
 	case args[0] == "clear":
 		cmdClear()
 	case args[0] == "graph":
-		st, err := store.New(filepath.Join(mustWd(), ".cimemo"))
-		if err != nil {
-			fatal("store: %v", err)
-		}
-		PrintGraph(BuildCommandGraph(st))
+		PrintGraph(BuildCommandGraph(NewStoreAdapter(mustWd())))
 	case args[0] == "record" && len(args) > 1:
 		cmdRecord(args[1:])
 	case args[0] == "dissect" && len(args) == 3:
@@ -636,13 +632,16 @@ func cmdMemoize(args []string, forceFull bool) {
 		fmt.Printf("[cimemo]   warn: %s\n", f.Warning)
 	}
 
-	// Cross-command dependency graph: if this command's outputs feed
-	// other commands, their receipts are now stale — name them.
+	// Cross-command dependency graph: proactively invalidate the
+	// receipts of all transitive dependents. Their inputs changed via
+	// this command's outputs — their next run must be a MISS, not a
+	// stale HIT.
 	if !isDocker {
-		edges := BuildCommandGraph(st)
-		if dependents := InvalidateDependents(edges, command); len(dependents) > 0 {
-			fmt.Printf("[cimemo] graph: %d dependent command(s) invalidated:\n", len(dependents))
-			for _, dep := range dependents {
+		graph := NewStoreAdapter(wd)
+		edges := BuildCommandGraph(graph)
+		if invalidated := InvalidateDependents(graph, edges, command); len(invalidated) > 0 {
+			fmt.Printf("[cimemo] graph: invalidated %d dependent receipt(s):\n", len(invalidated))
+			for _, dep := range invalidated {
 				fmt.Printf("[cimemo]   %s\n", shortCmd(dep))
 			}
 		}
