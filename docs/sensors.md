@@ -15,6 +15,27 @@ this command depend on?" with a different soundness/cost profile.
 | 6 | output content diffs (blob store + divergence detector) | ground truth | `store` + `dissect` | post-exec |
 | 9 | GOCACHEPROG pass-through proxy + miss log | exact | `gocache` | during (go only) |
 
+## Warm mode (cache pre-seeding from history)
+
+Replay git history through cimemo to pre-seed the cache:
+
+    cimemo warm --last 10 make          # replay last 10 commits
+    cimemo warm --since v1.2.0 make     # replay from a tag
+
+Each commit is checked out (oldest first), the build command runs
+through cimemo, receipts accumulate. The warming curve report shows
+cold vs warm per commit and cumulative hit rate.
+
+Validated on k8swatch: first pass = 5 cold builds (4.1s total), second
+pass = 5 warm hits (489ms total, 8.5x speedup). Each commit gets its
+own receipt; the GOCACHEPROG action cache warms incrementally across
+commits (packages that didn't change between commits hit the compile
+cache even though the receipt is new).
+
+Use cases: new CI runner warmup, cache recovery after clear/upgrade,
+demonstration on any project's history, controlled experiments for the
+paper (known timings, warming curve as a measurable metric).
+
 ## Cross-command dependency graph
 
 Receipts record what each command reads (read_set) and writes (blobs).
