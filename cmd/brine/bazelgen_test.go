@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -112,5 +113,98 @@ func TestImportToLabel(t *testing.T) {
 	}
 	if got := importToLabel("github.com/stackrox/k8swatch/blobstore", "github.com/stackrox/k8swatch"); got != "//blobstore" {
 		t.Errorf("sub: %q", got)
+	}
+}
+
+const sampleWithTags = `load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "lib",
+    tags = ["manual"],
+    srcs = ["a.go"],
+)
+
+go_test(
+    name = "lib_test",
+    tags = [
+        "manual",
+        "integration",
+    ],
+    srcs = ["a_test.go"],
+)
+`
+
+func TestTagAllRulesManual(t *testing.T) {
+	p := writeTempBuild(t, `go_library(
+    name = "lib",
+    srcs = ["a.go"],
+)
+`)
+	if !tagAllRulesManual(p) {
+		t.Fatal("expected modification")
+	}
+	if tagAllRulesManual(p) {
+		t.Fatal("expected idempotent no-op on second run")
+	}
+	rules, _ := parseBuildFile(p)
+	if len(rules) != 1 {
+		t.Fatalf("parse after tag: %d rules", len(rules))
+	}
+}
+
+func TestUntagManual(t *testing.T) {
+	p := writeTempBuild(t, sampleWithTags)
+	if !untagManual(p) {
+		t.Fatal("expected modification")
+	}
+	data, _ := os.ReadFile(p)
+	s := string(data)
+	if strings.Contains(s, "manual") {
+		t.Errorf("manual still present:\n%s", s)
+	}
+	if !strings.Contains(s, `"integration"`) {
+		t.Errorf("other tags must be preserved:\n%s", s)
+	}
+	// go_library lost its tags line entirely; go_test keeps ["integration"]
+	if strings.Contains(s, "tags = [") && !strings.Contains(s, "integration") {
+		t.Errorf("empty tags list should be dropped:\n%s", s)
+	}
+}
+
+func TestUntagManualNoTags(t *testing.T) {
+	p := writeTempBuild(t, sampleBuild)
+	if untagManual(p) {
+		t.Fatal("no manual tags: expected no-op")
+	}
+}
+
+func TestAddToListAttrMultiLine(t *testing.T) {
+	p := writeTempBuild(t, sampleBuild)
+	if !addToListAttr(p, "go_library", "srcs", "zzz.go") {
+		t.Fatal("expected insert")
+	}
+	rules, _ := parseBuildFile(p)
+	if !contains(rules[0].srcs, "zzz.go") {
+		t.Errorf("zzz.go not in srcs: %v", rules[0].srcs)
+	}
+	// idempotent
+	if addToListAttr(p, "go_library", "srcs", "zzz.go") {
+		t.Error("expected no-op on duplicate")
+	}
+}
+
+func TestAddToListAttrAbsent(t *testing.T) {
+	// rule with no deps attribute: fix must create it
+	p := writeTempBuild(t, `go_library(
+    name = "lib",
+    srcs = ["a.go"],
+)
+`)
+	if !addToListAttr(p, "go_library", "deps", "//blobstore") {
+		t.Fatal("expected attribute creation")
+	}
+	rules, _ := parseBuildFile(p)
+	if !contains(rules[0].deps, "//blobstore") {
+		t.Errorf("deps not created: %v", rules[0].deps)
 	}
 }
