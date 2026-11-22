@@ -335,6 +335,22 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 	}
 
+	// Side caches: restore lockfile-keyed directories (node_modules,
+	// vendor) from the blob store before building. This is the CA
+	// branch's vendor/UI caching, generalized.
+	if os.Getenv("BRINE_REMOTE") == "1" {
+		for _, sc := range defaultSideCaches(wd) {
+			if restored, err := restoreSideCache(wd, sc, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "[brine] side-cache restore %s: %v\n", sc.Dir, err)
+			} else if !restored && sc.RestoreCmd != "" {
+				fmt.Printf("[brine] side-cache: %s not in store — running %s\n", sc.Dir, sc.RestoreCmd)
+				// The restore command runs as part of the build
+				// (it's not memoized separately — the side cache IS
+				// the memoization of this step)
+			}
+		}
+	}
+
 	// Prepare go builds: mtime normalization + VCS stamp disabling.
 	// These fix the systematic action-cache invalidation that git
 	// checkout causes (mtime reset on unchanged files → package-index
@@ -674,6 +690,23 @@ func cmdMemoize(args []string, forceFull bool) {
 	// content-addressed — zero extra storage; just a second index).
 	if !isDocker {
 		storeCommitReceiptIfClean(st, m, wd, keyCommand, toolchain)
+	}
+
+	// Docker image: also save to blob store for cross-machine restore
+	// (docker save → upload; docker load on fresh runners).
+	if isDocker {
+		for _, ref := range m.ImageOutputs {
+			saveDockerImage(ref.ImageID, k, nil)
+		}
+	}
+
+	// Side caches: save lockfile-keyed directories (node_modules, vendor)
+	for _, sc := range defaultSideCaches(wd) {
+		if os.Getenv("BRINE_REMOTE") == "1" {
+			if err := saveSideCache(wd, sc, nil); err != nil {
+				fmt.Fprintf(os.Stderr, "[brine] side-cache save %s: %v\n", sc.Dir, err)
+			}
+		}
 	}
 
 	// Effective config report: what's influencing keys that could be
