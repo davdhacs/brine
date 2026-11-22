@@ -36,6 +36,7 @@ import (
 	"github.com/davdhacs/brine/dissect"
 	"github.com/davdhacs/brine/gocache"
 	"github.com/davdhacs/brine/key"
+	"github.com/davdhacs/brine/metrics"
 	"github.com/davdhacs/brine/model"
 	"github.com/davdhacs/brine/observe"
 	"github.com/davdhacs/brine/pinaudit"
@@ -1444,5 +1445,37 @@ func cmdRecord(args []string) {
 	}
 	if err := recordConfig(wd, advisories); err != nil {
 		fmt.Fprintf(os.Stderr, "[brine] record: config write: %v\n", err)
+	}
+}
+
+func cmdStats() {
+	wd, _ := os.Getwd()
+	runs, err := metrics.LoadAll(filepath.Join(wd, ".brine"))
+	if err != nil {
+		fmt.Println("no metrics (run brine <command> first)")
+		return
+	}
+	s := metrics.Summarize(runs)
+	fmt.Print(s.Format())
+
+	// also show cache state
+	cacheBytes, manifests, blobs := CacheStats(wd)
+	fmt.Printf("\ncache: %d manifests, %d blobs, %.1f MB\n",
+		manifests, blobs, float64(cacheBytes)/1024/1024)
+
+	// recent runs
+	fmt.Println("\nrecent runs:")
+	count := len(runs)
+	start := count - 5
+	if start < 0 {
+		start = 0
+	}
+	for _, r := range runs[start:] {
+		status := "MISS"
+		if r.Hit {
+			status = "HIT "
+		}
+		fmt.Printf("  %s %s  %dms  %s\n",
+			r.Timestamp.Format("15:04:05"), status, r.WallMs, r.Command)
 	}
 }
