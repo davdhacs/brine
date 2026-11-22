@@ -54,9 +54,15 @@ func parseWithBases(data []byte, projectRoot, depDir string) []string {
 			return filepath.ToSlash(rel), true
 		}
 		// Try the .d file's directory first (cmake: ../src/foo.c from
-		// build/), then the project root (make: src/foo.c from root).
+		// build/), then the project root (make/cargo: src/foo.c from
+		// root). Prefer the base where the file actually exists —
+		// gcc paths are relative to the build dir, cargo/rustc paths
+		// to the project root, and guessing wrong creates phantom paths.
 		for _, base := range []string{depDir, projectRoot} {
 			abs := filepath.Clean(filepath.Join(base, dep))
+			if _, err := os.Stat(abs); err != nil {
+				continue // doesn't exist at this base
+			}
 			rel, err := filepath.Rel(projectRoot, abs)
 			if err == nil && !strings.HasPrefix(rel, "..") {
 				return filepath.ToSlash(rel), true
