@@ -86,6 +86,8 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "manifest" && len(args) > 2 && args[1] == "create":
+		cmdManifestCreate(args[2:])
 	case args[0] == "stats":
 		cmdStats()
 	case args[0] == "warm" && len(args) > 1:
