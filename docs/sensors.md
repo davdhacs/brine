@@ -35,7 +35,7 @@ change).
 
 | # | Sensor | Tier | Status |
 |---|--------|------|--------|
-| 7 | compiler dep-files (gcc/clang `-MD`, rustc `dep-info`) | exact | stub in `sensor/sensor.go`; needs a C/C++ case study that generates .d files |
+| 7 | compiler dep-files (gcc/clang `-MD`) | exact | **implemented**: `depfiles` package — parses .d files for exact C/C++ header closures; wired into read-set discovery; 8 tests |
 | 8 | dry-run/verbose traces (`make -n`, `tsc --listFiles`) | exact | stub; needs a Makefile-based project |
 | ~~10~~ | ~~coverage profiles (test selection)~~ | — | **out of scope**: selection changes what runs (a prediction); cimemo memoizes what ran (deterministic). Coverage data may feed closure discovery; the selection logic is a different tool. |
 | 11 | git history mining (seed model from co-changes) | statistical | stub |
