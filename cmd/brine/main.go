@@ -86,6 +86,8 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "stats":
+		cmdStats()
 	case args[0] == "warm" && len(args) > 1:
 		cmdWarm(args[1:])
 	case args[0] == "graph":
@@ -124,6 +126,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	if err != nil {
 		fatal("store: %v", err)
 	}
+	metricsLogger := metrics.NewLogger(filepath.Join(wd, ".brine"))
 	// BRINE_REMOTE=1: receipts + output blobs in the cloud store, and
 	// the gocache proxy's remote tier on for Go commands (both levels
 	// share the backend and container).
@@ -238,6 +241,9 @@ func cmdMemoize(args []string, forceFull bool) {
 						time.Since(start).Round(time.Millisecond))
 					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
 					recordHit(mod, command)
+					if metricsLogger != nil {
+						metricsLogger.Log(&metrics.Run{Command: command, Hit: true, WallMs: time.Since(start).Milliseconds()})
+					}
 					return
 				}
 				fmt.Fprintf(os.Stderr, "[brine] restore error: %v — rebuilding\n", err)
@@ -310,6 +316,9 @@ func cmdMemoize(args []string, forceFull bool) {
 						time.Since(start).Round(time.Millisecond))
 					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
 					recordHit(mod, command)
+					if metricsLogger != nil {
+						metricsLogger.Log(&metrics.Run{Command: command, Hit: true, WallMs: time.Since(start).Milliseconds()})
+					}
 					return
 				}
 			}
@@ -715,6 +724,19 @@ func cmdMemoize(args []string, forceFull bool) {
 	// IS something non-default — silent for the zero-config case.
 	reportEffectiveConfig(wd)
 
+	// Metrics: record this run (build path = miss)
+	metricsLogger.Log(&metrics.Run{
+		Command:     command,
+		Key:         k,
+		Strategy:    strategy,
+		Hit:         false,
+		WallMs:      time.Since(start).Milliseconds(),
+		BuildMs:     buildTime.Milliseconds(),
+		InputCount:  int64(len(readSet)),
+		OutputCount: int64(len(m.Blobs)),
+		OutputBytes: sumSizes(m.Blobs),
+	})
+
 	// Pin audit (config determinism): floating dependency references
 	// make builds nondeterministic and caches unreliable — name them.
 	for _, f := range pinaudit.Audit(wd) {
@@ -800,6 +822,14 @@ func recordHit(mod *model.Model, command string) {
 	mod.RecordBuild(model.BuildRecord{Time: time.Now(), Command: command, Full: false})
 	if err := mod.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "[brine] model save: %v\n", err)
+	}
+}
+
+// recordHitLogged records a hit AND writes a metrics entry.
+func recordHitLogged(mod *model.Model, logger *metrics.Logger, run *metrics.Run) {
+	recordHit(mod, run.Command)
+	if logger != nil {
+		logger.Log(run)
 	}
 }
 
