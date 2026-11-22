@@ -67,6 +67,19 @@ The git implementation is ~60 lines. Each additional VCS is another
 | **`.gitignore` parsing** | each VCS has its own ignore syntax | the pattern-matching approach generalizes; only the parser changes |
 | **`safe.directory` workaround** | git-specific ownership check | other VCS don't have this issue |
 
+## No-VCS operation (zip-extracted projects)
+
+When no .git exists, cimemo falls back to hashing ALL project files
+as the closure (skipping dot-dirs, vendor, node_modules, target, and
+the .cimemo store itself). Over-inclusive but sound — any file change
+invalidates the receipt. Validated: receipts work, source changes miss,
+untracked config changes miss. The dep-files sensor and write-tracking
+also work without git.
+
+Trade-off: a README change invalidates the build (it is in the all-files
+set). For zip-extracted projects this is usually acceptable — the
+alternative is no caching at all.
+
 ## Design principle
 
 Don't call git directly from feature code — call through the five
