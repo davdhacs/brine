@@ -85,6 +85,8 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "warm" && len(args) > 1:
+		cmdWarm(args[1:])
 	case args[0] == "graph":
 		PrintGraph(BuildCommandGraph(NewStoreAdapter(mustWd())))
 	case args[0] == "record" && len(args) > 1:
