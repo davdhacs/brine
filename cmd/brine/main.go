@@ -86,6 +86,10 @@ func main() {
 		cmdGC(args[1:])
 	case args[0] == "clear":
 		cmdClear()
+	case args[0] == "worker":
+		cmdWorker(args[1:])
+	case args[0] == "remote-build":
+		cmdRemoteBuild(args[1:])
 	case args[0] == "bazel-generate":
 		cmdBazelGenerate(args[1:])
 	case args[0] == "serve":
@@ -122,6 +126,15 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
 	fmt.Fprintf(os.Stderr, "  --shadow   score learned predictions without trusting them\n")
 	os.Exit(1)
+}
+
+// reportKey writes the receipt key to BRINE_KEY_OUT when set — the
+// machine-readable channel brine worker uses to return receipt identity
+// to a remote-build client.
+func reportKey(k string) {
+	if p := os.Getenv("BRINE_KEY_OUT"); p != "" {
+		os.WriteFile(p, []byte(k), 0o644)
+	}
 }
 
 func cmdMemoize(args []string, forceFull bool) {
@@ -191,6 +204,7 @@ func cmdMemoize(args []string, forceFull bool) {
 				if !skipFast {
 					verifyRestored(m, wd)
 					if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
+						reportKey(ck)
 						fmt.Printf("[brine] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
 						fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 							count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
@@ -241,6 +255,7 @@ func cmdMemoize(args []string, forceFull bool) {
 				}
 				count, bytes, err := st.RestoreManifest(m, wd)
 				if err == nil {
+					reportKey(m.Key)
 					fmt.Printf("[brine] CACHE HIT: %s\n", m.Key)
 					fmt.Printf("[brine]   %d outputs, %.1f MB, strategy=%s (%s)\n",
 						count, float64(bytes)/1024/1024, m.Strategy,
@@ -315,6 +330,7 @@ func cmdMemoize(args []string, forceFull bool) {
 					fmt.Fprintf(os.Stderr, "[brine] receipt restore failed: %v — rebuilding\n", err)
 				}
 				if err == nil {
+					reportKey(k)
 					verifyRestored(m, wd)
 					fmt.Printf("[brine] CACHE HIT (keyed): %s — closure re-derived\n", k)
 					fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
@@ -699,6 +715,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			break // first go binary is the story; others are similar
 		}
 	}
+	reportKey(k)
 	if err := st.PutManifest(m); err != nil {
 		fatal("manifest store: %v", err)
 	}
@@ -1450,6 +1467,7 @@ func cmdRecord(args []string) {
 		outputDirs[b.Path] = true
 	}
 	m.InputHashes, m.DirListings = store.BuildProvenanceFiltered(wd, readSet, outputDirs)
+	reportKey(k)
 	if err := st.PutManifest(m); err != nil {
 		fatal("manifest store: %v", err)
 	}
