@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -512,6 +513,10 @@ func cmdMemoize(args []string, forceFull bool) {
 			// then only ADDS precision when it catches real reads.
 			if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 				readSet = unionFiles(readSet, filterWrites(gitFiles))
+			} else {
+				// no VCS: observed reads alone may miss files; add the
+				// full-project walk as a sound superset
+				readSet = unionFiles(readSet, filterWrites(noVCSFallback(wd)))
 			}
 		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 			// Same build-write invariant: tracked files rewritten by
@@ -529,6 +534,17 @@ func cmdMemoize(args []string, forceFull bool) {
 			readSet = filterWrites(filterBuildState(wd, all, builtAt))
 			if strategy != "dep-files" {
 				strategy = store.StrategyFallback
+			}
+		} else {
+			// No VCS: hash all project files (zip-extracted projects,
+			// tarballs, directories without .git). Over-inclusive but
+			// sound; build outputs excluded by the writes filter.
+			allFiles := noVCSFallback(wd)
+			if len(allFiles) > 0 {
+				readSet = filterWrites(filterBuildState(wd,
+					unionFiles(allFiles, untrackedConfigs(wd)), builtAt))
+				strategy = "no-vcs"
+				fmt.Printf("[cimemo] no VCS found — using all %d project files as closure (over-inclusive, sound)\n", len(readSet))
 			}
 		}
 	}
@@ -976,6 +992,37 @@ func untrackedConfigs(wd string) []string {
 	return out
 }
 
+// noVCSFallback: when no VCS is available (zip-extracted project,
+// no .git), hash ALL project files as the closure. Over-inclusive
+// but sound — any change invalidates.
+func noVCSFallback(wd string) []string {
+	var files []string
+	filepath.WalkDir(wd, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "vendor" ||
+				name == "node_modules" || name == "target" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, _ := filepath.Rel(wd, path)
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	if len(files) > 50000 {
+		files = files[:50000]
+	}
+	sort.Strings(files)
+	return files
+}
+
 // gitHead returns the current commit, or "" outside a repo.
 func gitHead(wd string) string {
 	out, err := exec.Command("git", "-C", wd, "-c", "safe.directory="+wd, "rev-parse", "HEAD").Output()
@@ -1259,6 +1306,10 @@ func cmdRecord(args []string) {
 			readSet = observed
 			if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 				readSet = unionFiles(readSet, filterWrites(gitFiles))
+			} else {
+				// no VCS: observed reads alone may miss files; add the
+				// full-project walk as a sound superset
+				readSet = unionFiles(readSet, filterWrites(noVCSFallback(wd)))
 			}
 		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 			readSet = filterWrites(filterBuildState(wd, unionFiles(gitFiles, untrackedConfigs(wd)), builtAt))
