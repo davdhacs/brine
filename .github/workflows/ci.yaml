@@ -22,4 +22,4 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test ./... -race
-      - run: go build ./cmd/cimemo
+      - run: go build ./cmd/brine

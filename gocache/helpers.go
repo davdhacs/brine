@@ -12,6 +12,6 @@ func actionOutputID(cacheDir, actionIDHex string) string {
 }
 
 func logRemoteIntegrity(actionIDHex, outputIDHex string) {
-	log.Printf("cimemo-gocache: INTEGRITY(remote get) %s: body hash != %s — treating as miss",
+	log.Printf("brine-gocache: INTEGRITY(remote get) %s: body hash != %s — treating as miss",
 		actionIDHex[:12], outputIDHex[:12])
 }

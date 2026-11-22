@@ -53,17 +53,17 @@ Receipt 290ms via commit fast path.
 ## busybox (C, single Makefile)
 
 Build failed on this system (kernel config prompt in defconfig) — not
-a cimemo issue.
+a brine issue.
 
 ## Node.js (C++, gyp + make)
 
 Build failed on this system (gyp/python incompatibility) — not a
-cimemo issue.
+brine issue.
 
 ## TypeScript (npm, hereby build)
 
 Build failed ( hereby requires a Go codegen step that errored) — not
-a cimemo issue. The npm/cargo paths work; this specific project has
+a brine issue. The npm/cargo paths work; this specific project has
 a build prerequisite issue.
 
 ## zed editor (Rust, many-crate workspace)
@@ -92,7 +92,7 @@ target/debug/...).
 
 ## Config scenarios (autotools-style)
 
-Three cases: config written outside cimemo (read-set catches flips),
+Three cases: config written outside brine (read-set catches flips),
 config generated in-build from tracked source (output, restored with
 receipt), config generated from env (irreducibly requires key_env
 declaration). All validated with fixtures.

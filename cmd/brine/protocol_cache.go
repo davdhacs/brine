@@ -7,7 +7,7 @@
 // three languages. Go already has GOCACHEPROG; this brings C/C++ and
 // Rust to parity.
 //
-// ccache: managed locally — CCACHE_DIR set to .cimemo/ccache, synced
+// ccache: managed locally — CCACHE_DIR set to .brine/ccache, synced
 // to the blob store as a directory snapshot after the build, restored
 // before the next build on a cold machine. ccache's files are
 // internally content-addressed (hash of preprocessor output).
@@ -32,7 +32,7 @@ type ProtocolCacheConfig struct {
 	// Env vars to set on the child command.
 	Env map[string]string
 
-	// ManagedDir: the cache directory cimemo manages (for sync).
+	// ManagedDir: the cache directory brine manages (for sync).
 	// Empty for sccache (it manages its own remote).
 	ManagedDir string
 }
@@ -59,7 +59,7 @@ func detectProtocolCache(wd string, args []string) *ProtocolCacheConfig {
 
 	if isCpp {
 		if _, err := exec.LookPath("ccache"); err == nil {
-			dir := filepath.Join(wd, ".cimemo", "ccache")
+			dir := filepath.Join(wd, ".brine", "ccache")
 			os.MkdirAll(dir, 0o755)
 			return &ProtocolCacheConfig{
 				Tool: "ccache",
@@ -75,11 +75,11 @@ func detectProtocolCache(wd string, args []string) *ProtocolCacheConfig {
 		if _, err := exec.LookPath("sccache"); err == nil {
 			env := map[string]string{
 				"RUSTC_WRAPPER": "sccache",
-				"SCCACHE_DIR":   filepath.Join(wd, ".cimemo", "sccache"),
+				"SCCACHE_DIR":   filepath.Join(wd, ".brine", "sccache"),
 			}
 			// sccache's native Azure support: if we have a remote
 			// configured, pass it through (sccache handles its own sync)
-			if acct := os.Getenv("CIMEMO_AZURE_ACCOUNT"); acct != "" {
+			if acct := os.Getenv("BRINE_AZURE_ACCOUNT"); acct != "" {
 				env["SCCACHE_AZURE_CONNECTION_STRING"] = os.Getenv("SCCACHE_AZURE_CONNECTION_STRING")
 				env["SCCACHE_AZURE_BLOB_CONTAINER"] = os.Getenv("SCCACHE_AZURE_BLOB_CONTAINER")
 			}
@@ -119,7 +119,7 @@ func syncProtocolCache(pc *ProtocolCacheConfig, remote interface {
 	// version would diff against the last sync.
 	// For now: upload a tar of the dir (compressed by the remote's
 	// gzip-at-rest).
-	fmt.Printf("[cimemo] ccache: syncing %s to blob store\n", pc.ManagedDir)
+	fmt.Printf("[brine] ccache: syncing %s to blob store\n", pc.ManagedDir)
 	// TODO: implement directory sync (tar + upload)
 	// The blob key should be content-derived from the ccache dir's
 	// file listing (so identical caches dedup).

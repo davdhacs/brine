@@ -3,7 +3,7 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/davdhacs/cimemo/key"
+	"github.com/davdhacs/brine/key"
 	"os"
 	"path"
 	"path/filepath"

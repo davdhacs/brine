@@ -10,8 +10,8 @@
 //
 // Configuration:
 //
-//	CIMEMO_MAX_CACHE_MB=2048   # 2GB limit (env var)
-//	{"max_cache_mb": 2048}     # .cimemo.json
+//	BRINE_MAX_CACHE_MB=2048   # 2GB limit (env var)
+//	{"max_cache_mb": 2048}     # .brine.json
 //
 // Default: unlimited (no eviction).
 package main
@@ -43,11 +43,11 @@ func EnforceCacheLimit(wd string) (int64, int, error) {
 	}
 	limitBytes := int64(limitMB) * 1024 * 1024
 
-	cimemoDir := filepath.Join(wd, ".cimemo")
+	brineDir := filepath.Join(wd, ".brine")
 
 	// Measure current size (blobs only; manifests are tiny)
 	var totalSize int64
-	blobDir := filepath.Join(cimemoDir, "blobs")
+	blobDir := filepath.Join(brineDir, "blobs")
 	blobSizes := make(map[string]int64) // hash → size
 	filepath.Walk(blobDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
@@ -67,7 +67,7 @@ func EnforceCacheLimit(wd string) (int64, int, error) {
 	}
 
 	// Load all manifests to find referenced blobs
-	manifestDir := filepath.Join(cimemoDir, "manifests")
+	manifestDir := filepath.Join(brineDir, "manifests")
 	type manifestInfo struct {
 		Key        string
 		LastRead   time.Time
@@ -143,7 +143,7 @@ func EnforceCacheLimit(wd string) (int64, int, error) {
 	}
 
 	if removed > 0 {
-		fmt.Printf("[cimemo] cache: evicted %d entries (%.1f MB freed, was %.1f MB, limit %d MB)\n",
+		fmt.Printf("[brine] cache: evicted %d entries (%.1f MB freed, was %.1f MB, limit %d MB)\n",
 			removed, float64(freed)/1024/1024, float64(totalSize)/1024/1024, limitMB)
 	}
 
@@ -152,7 +152,7 @@ func EnforceCacheLimit(wd string) (int64, int, error) {
 
 func getMaxCacheMB(wd string) int {
 	// env var takes precedence
-	if v := os.Getenv("CIMEMO_MAX_CACHE_MB"); v != "" {
+	if v := os.Getenv("BRINE_MAX_CACHE_MB"); v != "" {
 		var n int
 		fmt.Sscanf(v, "%d", &n)
 		return n
@@ -160,7 +160,7 @@ func getMaxCacheMB(wd string) int {
 	// config file
 	cfg := loadConfig(wd)
 	// check for max_cache_mb in the config
-	if data, err := os.ReadFile(filepath.Join(wd, ".cimemo.json")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(wd, ".brine.json")); err == nil {
 		var raw map[string]interface{}
 		if json.Unmarshal(data, &raw) == nil {
 			if v, ok := raw["max_cache_mb"].(float64); ok {
@@ -174,16 +174,16 @@ func getMaxCacheMB(wd string) int {
 
 // CacheStats returns current cache size and entry count.
 func CacheStats(wd string) (bytes int64, manifests int, blobs int) {
-	cimemoDir := filepath.Join(wd, ".cimemo")
+	brineDir := filepath.Join(wd, ".brine")
 
-	filepath.Walk(filepath.Join(cimemoDir, "blobs"), func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(filepath.Join(brineDir, "blobs"), func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
 			blobs++
 			bytes += info.Size()
 		}
 		return nil
 	})
-	entries, _ := os.ReadDir(filepath.Join(cimemoDir, "manifests"))
+	entries, _ := os.ReadDir(filepath.Join(brineDir, "manifests"))
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
 			manifests++

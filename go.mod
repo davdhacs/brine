@@ -1,4 +1,4 @@
-module github.com/davdhacs/cimemo
+module github.com/davdhacs/brine
 
 go 1.25
 

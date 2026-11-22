@@ -38,7 +38,7 @@ import (
 
 	"debug/elf"
 	"debug/macho"
-	"github.com/davdhacs/cimemo/buildinfo"
+	"github.com/davdhacs/brine/buildinfo"
 )
 
 // SectionDiff is one differing section.

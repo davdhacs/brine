@@ -1,8 +1,8 @@
-// Warm mode: replay git history through cimemo to pre-seed the cache.
+// Warm mode: replay git history through brine to pre-seed the cache.
 //
-//	cimemo warm --last 10 make              # replay last 10 commits
-//	cimemo warm --since v1.2.0 make         # replay from a tag
-//	cimemo warm --metrics out.json ...      # collect per-commit stats
+//	brine warm --last 10 make              # replay last 10 commits
+//	brine warm --since v1.2.0 make         # replay from a tag
+//	brine warm --metrics out.json ...      # collect per-commit stats
 //
 // Per-commit metrics include the "fresh runner" simulation: how many
 // bytes of cache a new CI runner would need to download to get the
@@ -33,6 +33,7 @@ type CommitMetrics struct {
 	WallMs   int64  `json:"wall_ms"`
 	Strategy string `json:"strategy"`
 	Outputs  int    `json:"outputs"`
+	Error    string `json:"error,omitempty"`
 
 	// GOCACHEPROG stats (Go builds)
 	Gets     int64 `json:"gets,omitempty"`
@@ -119,7 +120,7 @@ func cmdWarm(args []string) {
 		commits[i], commits[j] = commits[j], commits[i]
 	}
 
-	fmt.Printf("[cimemo] warm: %d commits, command: %s\n", len(commits), strings.Join(cmdArgs, " "))
+	fmt.Printf("[brine] warm: %d commits, command: %s\n", len(commits), strings.Join(cmdArgs, " "))
 
 	// save HEAD
 	origHead, _ := exec.Command("git", "-C", wd, "-c", "safe.directory="+wd,
@@ -136,8 +137,6 @@ func cmdWarm(args []string) {
 	var totalColdMs, totalWarmMs int64
 	var coldCount, warmCount int
 	var totalDownloadBytes int64
-
-	cimemoSelf, _ := os.Executable()
 
 	for idx, sha := range commits {
 		short := sha[:12]
@@ -171,53 +170,32 @@ func cmdWarm(args []string) {
 			}
 		}
 
-		// run through cimemo
+		// run through brine (all output suppressed for long runs)
 		start := time.Now()
-		cmd := exec.Command(cimemoSelf, cmdArgs...)
+		brineSelf, _ := os.Executable()
+		cmd := exec.Command(brineSelf, cmdArgs...)
 		cmd.Dir = wd
 		cmd.Env = os.Environ()
-		out, err := cmd.CombinedOutput()
+		devnull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		cmd.Stdout = devnull
+		cmd.Stderr = devnull
+		err := cmd.Run()
+		devnull.Close()
 		wall := time.Since(start).Milliseconds()
 		m.WallMs = wall
 
-		output := string(out)
-		if strings.Contains(output, "CACHE HIT") {
+		// Heuristic: <5s = receipt hit; >=5s = cold build
+		// (go builds take 20-30s cold, <1s on receipt hit)
+		if wall < 5000 && err == nil {
 			m.Cold = false
 			warmCount++
 			totalWarmMs += wall
-			fmt.Printf("HIT %dms", wall)
 		} else {
 			m.Cold = true
 			coldCount++
 			totalColdMs += wall
-			fmt.Printf("MISS→built %dms", wall)
 			if err != nil {
-				fmt.Printf(" (error: %v)", err)
-			}
-		}
-
-		// parse cimemo output for stats
-		for _, line := range strings.Split(output, "\n") {
-			if strings.Contains(line, "strategy=") {
-				parts := strings.Split(line, "strategy=")
-				if len(parts) > 1 {
-					m.Strategy = strings.TrimSpace(strings.Split(parts[1], " (")[0])
-				}
-			}
-			// GOCACHEPROG stats
-			if strings.Contains(line, "gocache:") {
-				// parse: [cimemo] gocache: N gets (H hit, M miss), P puts (B bytes)
-				var gets, hits, misses, puts int64
-				var putBytes int64
-				if n, _ := fmt.Sscanf(line,
-					"[cimemo] gocache: %d gets (%d hit, %d miss), %d puts (%d bytes",
-					&gets, &hits, &misses, &puts, &putBytes); n >= 4 {
-					m.Gets = gets
-					m.Hits = hits
-					m.Misses = misses
-					m.Puts = puts
-					m.PutBytes = putBytes
-				}
+				m.Error = err.Error()
 			}
 		}
 
@@ -226,7 +204,7 @@ func cmdWarm(args []string) {
 		// - build: the action-cache entries that HIT are what gets downloaded
 		if !m.Cold {
 			// receipt hit: find the manifest and sum blob sizes
-			if manifests, err := filepath.Glob(filepath.Join(wd, ".cimemo", "manifests", "*.json")); err == nil {
+			if manifests, err := filepath.Glob(filepath.Join(wd, ".brine", "manifests", "*.json")); err == nil {
 				for _, mf := range manifests {
 					data, _ := os.ReadFile(mf)
 					var mm map[string]interface{}
@@ -271,7 +249,7 @@ func cmdWarm(args []string) {
 
 	// summary
 	fmt.Printf("\n%s\n", strings.Repeat("=", 70))
-	fmt.Printf("[cimemo] warm: %d commits\n", len(allMetrics))
+	fmt.Printf("[brine] warm: %d commits\n", len(allMetrics))
 	fmt.Printf("  cold: %d (%.0f%%) — %dms total\n",
 		coldCount, float64(coldCount)/float64(len(allMetrics))*100, totalColdMs)
 	fmt.Printf("  warm: %d (%.0f%%) — %dms total\n",

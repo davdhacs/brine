@@ -1,7 +1,7 @@
 // Package gocache implements a GOCACHEPROG pass-through proxy backed by
 // the standard GOCACHE directory layout, plus a miss log.
 //
-// Why a proxy at all, locally? Three inputs to cimemo's reasoning (see
+// Why a proxy at all, locally? Three inputs to brine's reasoning (see
 // docs/sensors.md, sensor #9):
 //
 //  1. Exact work accounting — the miss log reports which actions a
@@ -15,7 +15,7 @@
 //
 // Cohabitation rule: the proxy reads and writes the EXACT standard
 // layout ($GOCACHE/<xx>/<actionID>-a action records, <outputID>-d data
-// files), so cimemo-wrapped builds and bare `go` builds share one
+// files), so brine-wrapped builds and bare `go` builds share one
 // cache. A proxy that stored elsewhere would split the cache and make
 // both sides colder.
 //
@@ -63,7 +63,7 @@ type Response struct {
 }
 
 // Stats is the miss log written on close. Path comes from
-// CIMEMO_GOCACHE_STATS. This is sensor #9's output: what the build
+// BRINE_GOCACHE_STATS. This is sensor #9's output: what the build
 // actually did at action granularity.
 type Stats struct {
 	Gets          int64    `json:"gets"`
@@ -85,7 +85,7 @@ type Stats struct {
 const maxLoggedMisses = 512
 
 // Serve runs the protocol loop on stdin/stdout. Intended to be re-exec'ed
-// as `cimemo gocache` with GOCACHEPROG pointing here.
+// as `brine gocache` with GOCACHEPROG pointing here.
 func Serve() error {
 	cacheDir := os.Getenv("GOCACHE")
 	if cacheDir == "" {
@@ -95,7 +95,7 @@ func Serve() error {
 		}
 		cacheDir = filepath.Join(home, "go-build")
 	}
-	return serveLoop(os.Stdin, os.Stdout, cacheDir, os.Getenv("CIMEMO_GOCACHE_STATS"), NewRemoteFromEnv())
+	return serveLoop(os.Stdin, os.Stdout, cacheDir, os.Getenv("BRINE_GOCACHE_STATS"), NewRemoteFromEnv())
 }
 
 // serveLoop is the testable protocol core.
@@ -139,7 +139,7 @@ func serveLoop(in io.Reader, out io.Writer, cacheDir, statsPath string, remote *
 			if err == io.EOF {
 				break
 			}
-			log.Printf("cimemo-gocache: decode: %v", err)
+			log.Printf("brine-gocache: decode: %v", err)
 			break
 		}
 
@@ -149,14 +149,14 @@ func serveLoop(in io.Reader, out io.Writer, cacheDir, statsPath string, remote *
 		if req.Command == "put" && req.BodySize > 0 && req.DiskPath == "" {
 			var bodyStr string
 			if err := dec.Decode(&bodyStr); err != nil {
-				log.Printf("cimemo-gocache: body decode: %v", err)
+				log.Printf("brine-gocache: body decode: %v", err)
 				continue
 			}
 			// go sends base64 without padding markers via JSON string;
 			// encoding is standard.
 			b, err := base64Decode(bodyStr)
 			if err != nil {
-				log.Printf("cimemo-gocache: base64: %v", err)
+				log.Printf("brine-gocache: base64: %v", err)
 				continue
 			}
 			body = b
@@ -165,7 +165,7 @@ func serveLoop(in io.Reader, out io.Writer, cacheDir, statsPath string, remote *
 		switch req.Command {
 		case "get":
 			stats.Gets++
-			if os.Getenv("CIMEMO_GOCACHE_RECORD_GETS") == "1" && len(stats.RequestedAll) < 20000 {
+			if os.Getenv("BRINE_GOCACHE_RECORD_GETS") == "1" && len(stats.RequestedAll) < 20000 {
 				stats.RequestedAll = append(stats.RequestedAll, hex.EncodeToString(req.ActionID))
 			}
 			resp := handleGet(cacheDir, &req)
@@ -222,7 +222,7 @@ func serveLoop(in io.Reader, out io.Writer, cacheDir, statsPath string, remote *
 				stats.PutDiskPath++
 			}
 			storedPath, storedSize := handlePut(cacheDir, &req, body)
-			if storedPath != "" && os.Getenv("CIMEMO_GOCACHE_RECORD_GETS") == "1" && len(stats.PutActions) < 20000 {
+			if storedPath != "" && os.Getenv("BRINE_GOCACHE_RECORD_GETS") == "1" && len(stats.PutActions) < 20000 {
 				stats.PutActions = append(stats.PutActions, hex.EncodeToString(req.ActionID))
 			}
 			if storedPath != "" {
@@ -279,7 +279,7 @@ func serveLoop(in io.Reader, out io.Writer, cacheDir, statsPath string, remote *
 			return nil
 
 		default:
-			log.Printf("cimemo-gocache: unknown command %q", req.Command)
+			log.Printf("brine-gocache: unknown command %q", req.Command)
 		}
 	}
 
@@ -330,7 +330,7 @@ func handlePut(cacheDir string, req *Request, body []byte) (string, int64) {
 		if len(body) > 0 {
 			sum := sha256.Sum256(body)
 			if hex.EncodeToString(sum[:]) != outputIDHex {
-				log.Printf("cimemo-gocache: put %s: OutputID != sha256(body); using content hash",
+				log.Printf("brine-gocache: put %s: OutputID != sha256(body); using content hash",
 					actionID[:12])
 				outputIDHex = hex.EncodeToString(sum[:])
 			}
@@ -404,9 +404,9 @@ func writeDataFile(cacheDir, outputIDHex string, body []byte) {
 
 // atomicWrite writes temp+rename so go never sees partial entries.
 func atomicWrite(path string, data []byte) {
-	tmp := path + ".tmp-cimemo"
+	tmp := path + ".tmp-brine"
 	if err := os.WriteFile(tmp, data, 0o666); err != nil {
-		log.Printf("cimemo-gocache: write %s: %v", path, err)
+		log.Printf("brine-gocache: write %s: %v", path, err)
 		return
 	}
 	os.Rename(tmp, path)

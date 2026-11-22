@@ -23,7 +23,7 @@ const negativesMax = 10000
 func loadNegatives(cacheDir string) *Negatives {
 	n := &Negatives{
 		set:  make(map[string]bool),
-		path: filepath.Join(cacheDir, "cimemo-negatives.json"),
+		path: filepath.Join(cacheDir, "brine-negatives.json"),
 	}
 	data, err := os.ReadFile(n.path)
 	if err == nil {

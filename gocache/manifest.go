@@ -12,7 +12,7 @@
 // Manifest key: module identity = sha256(go.mod content + build
 // config). Coarser than per-commit keys on purpose — a one-file PR
 // still shares ~the whole working set with its parent (the Level-2
-// lockfile-keyed side cache from the cimemo design).
+// lockfile-keyed side cache from the brine design).
 package gocache
 
 import (
@@ -46,13 +46,13 @@ func manifestKey() string {
 	for _, v := range []string{"CGO_ENABLED", "GOOS", "GOARCH", "GOFLAGS"} {
 		fmt.Fprintf(h, "|%s=%s", v, os.Getenv(v))
 	}
-	// Scope: the build target (set by cimemo main from the go command's
+	// Scope: the build target (set by brine main from the go command's
 	// package patterns). Module-identity-only keys prefetch the union of
 	// every target's working set — the CI serve-change leg prefetched
 	// 17K actions for a 5K build. Scoped keys fetch exactly the needed
 	// set; the first build of a target falls back to the module-wide
 	// behavior naturally (its manifest starts empty).
-	if scope := os.Getenv("CIMEMO_GOCACHE_SCOPE"); scope != "" {
+	if scope := os.Getenv("BRINE_GOCACHE_SCOPE"); scope != "" {
 		fmt.Fprintf(h, "|scope=%s", scope)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:24]
@@ -128,7 +128,7 @@ func saveMerge(old *SessionManifest, sessionActions []string, r *Remote) *Sessio
 // skipped (content-addressed, same bytes).
 func prefetch(r *Remote, cacheDir string, neg *Negatives, tt *TimeoutTracker, done chan<- struct{}) {
 	defer close(done)
-	if os.Getenv("CIMEMO_GOCACHE_NOPREFETCH") == "1" {
+	if os.Getenv("BRINE_GOCACHE_NOPREFETCH") == "1" {
 		return
 	}
 	m := loadSessionManifest(r)

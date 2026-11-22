@@ -13,8 +13,8 @@
 package store
 
 import (
-	"github.com/davdhacs/cimemo/buildinfo"
-	"github.com/davdhacs/cimemo/gocache"
+	"github.com/davdhacs/brine/buildinfo"
+	"github.com/davdhacs/brine/gocache"
 
 	"crypto/sha256"
 	"encoding/hex"
@@ -166,7 +166,7 @@ func (s *Store) PutManifest(m *Manifest) error {
 			// receipt is still valid on this machine — but never
 			// silently: an expired token or dead store otherwise looks
 			// like cache misses forever.
-			fmt.Fprintf(os.Stderr, "[cimemo] remote receipt upload failed: %v (local receipt still valid)\n", err)
+			fmt.Fprintf(os.Stderr, "[brine] remote receipt upload failed: %v (local receipt still valid)\n", err)
 			return nil
 		}
 	}
@@ -216,9 +216,9 @@ func (s *Store) HasManifest(key string) bool {
 // CERTAINTY: every blob is re-verified (sha256 == its key) before it
 // is written, INCLUDING locally-stored ones — a corrupted local blob
 // file would otherwise serve wrong bytes silently. Opt out only with
-// CIMEMO_TRUST_LOCAL=1 (skips ~1s per GB on restore).
+// BRINE_TRUST_LOCAL=1 (skips ~1s per GB on restore).
 func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
-	trustLocal := os.Getenv("CIMEMO_TRUST_LOCAL") == "1"
+	trustLocal := os.Getenv("BRINE_TRUST_LOCAL") == "1"
 	var count int
 	var total int64
 	for _, ref := range m.Blobs {

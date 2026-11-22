@@ -1,6 +1,6 @@
 # VCS abstraction boundary
 
-cimemo uses git for five specific capabilities, not as a monolithic
+brine uses git for five specific capabilities, not as a monolithic
 dependency. This document maps the coupling points and what a non-git
 VCS would need to provide.
 
@@ -69,9 +69,9 @@ The git implementation is ~60 lines. Each additional VCS is another
 
 ## No-VCS operation (zip-extracted projects)
 
-When no .git exists, cimemo falls back to hashing ALL project files
+When no .git exists, brine falls back to hashing ALL project files
 as the closure (skipping dot-dirs, vendor, node_modules, target, and
-the .cimemo store itself). Over-inclusive but sound — any file change
+the .brine store itself). Over-inclusive but sound — any file change
 invalidates the receipt. Validated: receipts work, source changes miss,
 untracked config changes miss. The dep-files sensor and write-tracking
 also work without git.

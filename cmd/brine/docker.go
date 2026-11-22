@@ -1,4 +1,4 @@
-// Docker image receipts: `cimemo docker build -t name:tag .` memoized
+// Docker image receipts: `brine docker build -t name:tag .` memoized
 // at the IMAGE level. The receipt records the built image ID; a hit
 // re-tags it instead of rebuilding. This is the CA branch's proven
 // fast path (receipt → re-tag), generalized.
@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/davdhacs/cimemo/key"
+	"github.com/davdhacs/brine/key"
 )
 
 // dockerBuildTags extracts -t/--tag values from a docker/buildx build
@@ -98,10 +98,10 @@ func dockerContextClosure(wd string, args []string) []string {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		// Skip cimemo's own cache (self-referential: every run rewrites
+		// Skip brine's own cache (self-referential: every run rewrites
 		// manifests — permanent misses) and .git (stable but huge).
 		// MUST run before the regular-file filter — dirs hit this path.
-		if rel == ".cimemo" || rel == ".git" {
+		if rel == ".brine" || rel == ".git" {
 			return filepath.SkipDir
 		}
 		if !d.Type().IsRegular() {
@@ -172,7 +172,7 @@ func dockerBaseDigests(wd string, args []string) []string {
 					digest = image
 				}
 			}
-			fmt.Printf("[cimemo] AUDIT docker-base-unpinned: %s resolves to %s — mutable tag; pin with @%s for deterministic config\n",
+			fmt.Printf("[brine] AUDIT docker-base-unpinned: %s resolves to %s — mutable tag; pin with @%s for deterministic config\n",
 				image, digest, digest)
 			out = append(out, digest)
 		}
@@ -210,9 +210,9 @@ func localDigest(image string) string {
 // keyTail folds every INPUT CLASS INVISIBLE TO GIT-BASED KEYS into one
 // key fragment:
 //
-//  1. env vars named in CIMEMO_KEY_ENV ("CFLAGS,CXXFLAGS,...") — env
+//  1. env vars named in BRINE_KEY_ENV ("CFLAGS,CXXFLAGS,...") — env
 //     changes output without changing any file
-//  2. files matching CIMEMO_KEY_FILES globs — user escape hatch
+//  2. files matching BRINE_KEY_FILES globs — user escape hatch
 //  3. UNTRACKED CONFIG ARTIFACTS (config.h written by ./configure,
 //     CMakeCache.txt outside build dirs, local.mk, .env) — autotools
 //     convention puts build config in untracked source-tree files;
@@ -243,7 +243,7 @@ func keyTail(wd string) string {
 	// Untracked-config patterns are NOT keyed here: a config the build
 	// GENERATES is an output (keying it conflicts — the stale-serve
 	// found in the generated-config case); a config written OUTSIDE
-	// cimemo belongs to the READ-SET, where the writes filter
+	// brine belongs to the READ-SET, where the writes filter
 	// disambiguates. Env and user globs stay keyed: env influences
 	// builds through no file any sensor can observe.
 

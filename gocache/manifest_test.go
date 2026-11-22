@@ -5,20 +5,20 @@ import (
 	"testing"
 )
 
-// The manifest key scopes per build target (CIMEMO_GOCACHE_SCOPE):
+// The manifest key scopes per build target (BRINE_GOCACHE_SCOPE):
 // the CI serve-change leg once prefetched 17K actions for a 5K build
 // under a module-identity-only key.
 func TestManifestKeyScoping(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(dir+"/go.mod", []byte("module m\n\ngo 1.24\n"), 0o644)
 
-	t.Setenv("CIMEMO_GOCACHE_SCOPE", "")
+	t.Setenv("BRINE_GOCACHE_SCOPE", "")
 	base := manifestKey()
 
-	t.Setenv("CIMEMO_GOCACHE_SCOPE", "./central")
+	t.Setenv("BRINE_GOCACHE_SCOPE", "./central")
 	scoped := manifestKey()
 
-	t.Setenv("CIMEMO_GOCACHE_SCOPE", "./sensor/kubernetes")
+	t.Setenv("BRINE_GOCACHE_SCOPE", "./sensor/kubernetes")
 	scoped2 := manifestKey()
 
 	if base == scoped || scoped == scoped2 {
@@ -26,7 +26,7 @@ func TestManifestKeyScoping(t *testing.T) {
 	}
 
 	// Same scope + same go.mod → stable.
-	t.Setenv("CIMEMO_GOCACHE_SCOPE", "./central")
+	t.Setenv("BRINE_GOCACHE_SCOPE", "./central")
 	if manifestKey() != scoped {
 		t.Fatal("same scope must be stable")
 	}

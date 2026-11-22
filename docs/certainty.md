@@ -13,7 +13,7 @@
 ## Measured (CI gate, every run)
 
 - GROUND TRUTH leg: the receipt-restored binary is byte-compared against
-  a PLAIN no-cimemo build of the same tree
+  a PLAIN no-brine build of the same tree
 - buildinfo Verify on restore (vcs.revision, ldflags)
 
 ## Advisory (audit layers)

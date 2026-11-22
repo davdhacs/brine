@@ -18,7 +18,7 @@
 // which invalidates C. The transitive closure is computed over the
 // edge list.
 //
-// The graph lives in the .cimemo store as a simple edge list, rebuilt
+// The graph lives in the .brine store as a simple edge list, rebuilt
 // from receipts on demand. No persistence beyond the receipts
 // themselves — the graph IS the receipts, connected.
 package main
@@ -140,12 +140,12 @@ func InvalidateDependents(st *StoreAdapter, edges []DepEdge, rebuilt string) []s
 // PrintGraph renders the graph for diagnostics.
 func PrintGraph(edges []DepEdge) {
 	if len(edges) == 0 {
-		fmt.Println("[cimemo] graph: no cross-command dependencies found")
+		fmt.Println("[brine] graph: no cross-command dependencies found")
 		return
 	}
-	fmt.Printf("[cimemo] graph: %d cross-command dependencies:\n", len(edges))
+	fmt.Printf("[brine] graph: %d cross-command dependencies:\n", len(edges))
 	for _, e := range edges {
-		fmt.Printf("[cimemo]   %s → %s (via %s)\n",
+		fmt.Printf("[brine]   %s → %s (via %s)\n",
 			shortCmd(e.Producer), shortCmd(e.Consumer), e.File)
 	}
 }
@@ -161,11 +161,11 @@ func shortCmd(cmd string) string {
 // StoreAdapter wraps the store for the graph's needs (avoids import
 // cycles with the store package).
 type StoreAdapter struct {
-	root string // .cimemo directory
+	root string // .brine directory
 }
 
 func NewStoreAdapter(wd string) *StoreAdapter {
-	return &StoreAdapter{root: filepath.Join(wd, ".cimemo")}
+	return &StoreAdapter{root: filepath.Join(wd, ".brine")}
 }
 
 func (s *StoreAdapter) AllManifests() []map[string]interface{} {

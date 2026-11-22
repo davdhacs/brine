@@ -1,9 +1,9 @@
 // Record mode: run a build with full instrumentation, observe what the
-// sensors find, and write the discovered configuration to .cimemo.json
+// sensors find, and write the discovered configuration to .brine.json
 // so every later run benefits. The "learn your build" command.
 //
-//	cimemo record make          # run, observe, record
-//	cimemo record go build ...  # works for any command cimemo wraps
+//	brine record make          # run, observe, record
+//	brine record go build ...  # works for any command brine wraps
 //
 // What it observes and records:
 //
@@ -35,9 +35,9 @@ type Advisory struct {
 	Config  string // the JSON fragment to add, if applicable
 }
 
-// recordConfig merges discovered settings into .cimemo.json.
+// recordConfig merges discovered settings into .brine.json.
 func recordConfig(wd string, advisories []Advisory) error {
-	cfgPath := filepath.Join(wd, ".cimemo.json")
+	cfgPath := filepath.Join(wd, ".brine.json")
 
 	// load current (raw map for merge)
 	var raw map[string]interface{}
@@ -56,7 +56,7 @@ func recordConfig(wd string, advisories []Advisory) error {
 			if raw["buildvcs"] == nil {
 				raw["buildvcs"] = a.Config
 				changed = true
-				fmt.Printf("[cimemo] record: buildvcs = %q\n", a.Config)
+				fmt.Printf("[brine] record: buildvcs = %q\n", a.Config)
 			}
 		case "config-found":
 			var files []string
@@ -77,18 +77,18 @@ func recordConfig(wd string, advisories []Advisory) error {
 				files = append(files, a.Config)
 				raw["key_files"] = files
 				changed = true
-				fmt.Printf("[cimemo] record: key_files += %q\n", a.Config)
+				fmt.Printf("[brine] record: key_files += %q\n", a.Config)
 			}
 		case "env-suspected":
 			// Cannot guess which var — just report.
-			fmt.Printf("[cimemo] record: %s\n", a.Message)
+			fmt.Printf("[brine] record: %s\n", a.Message)
 		case "writes-off":
-			fmt.Printf("[cimemo] record: %s\n", a.Message)
+			fmt.Printf("[brine] record: %s\n", a.Message)
 		}
 	}
 
 	if !changed {
-		fmt.Println("[cimemo] record: no new config to record")
+		fmt.Println("[brine] record: no new config to record")
 		return nil
 	}
 
@@ -218,7 +218,7 @@ func discoverIgnoredConfigs(wd string) []string {
 			if strings.HasPrefix(base, "config") || strings.Contains(base, "flags") || strings.Contains(base, "version") {
 				configish = true
 			}
-			for _, excluded := range []string{"program", "main", "app", "test", "a.out", "cimemo"} {
+			for _, excluded := range []string{"program", "main", "app", "test", "a.out", "brine"} {
 				if base == excluded {
 					configish = false
 					break
@@ -233,7 +233,7 @@ func discoverIgnoredConfigs(wd string) []string {
 }
 
 // reportEffectiveConfig prints the non-default key configuration in
-// effect, framed as what could be saved to .cimemo.json. Silent when
+// effect, framed as what could be saved to .brine.json. Silent when
 // everything is default (tier 0 — zero config, zero noise).
 func reportEffectiveConfig(wd string) {
 	cfg := loadConfig(wd)
@@ -251,7 +251,7 @@ func reportEffectiveConfig(wd string) {
 	if cfg.BuildVCS != "" {
 		lines = append(lines, fmt.Sprintf("  buildvcs:  %q", cfg.BuildVCS))
 	}
-	if t := os.Getenv("CIMEMO_TRUST_LOCAL"); t == "1" {
+	if t := os.Getenv("BRINE_TRUST_LOCAL"); t == "1" {
 		lines = append(lines, "  trust_local: true (env)")
 	}
 
@@ -281,15 +281,15 @@ func reportEffectiveConfig(wd string) {
 	}
 
 	if len(lines) > 0 || len(hint) > 0 {
-		fmt.Println("[cimemo] config:")
+		fmt.Println("[brine] config:")
 		for _, l := range lines {
 			fmt.Println(l)
 		}
 		for _, h := range hint {
 			fmt.Printf("  suggest: %s\n", h)
 		}
-		if _, err := os.Stat(filepath.Join(wd, ".cimemo.json")); os.IsNotExist(err) && len(lines) > 0 {
-			fmt.Println("  persist: cimemo record <command>  (or copy the above into .cimemo.json)")
+		if _, err := os.Stat(filepath.Join(wd, ".brine.json")); os.IsNotExist(err) && len(lines) > 0 {
+			fmt.Println("  persist: brine record <command>  (or copy the above into .brine.json)")
 		}
 	}
 }

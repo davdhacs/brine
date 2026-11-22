@@ -1,6 +1,6 @@
 name: integration
 
-# On-demand demo: build a popular project through cimemo and report
+# On-demand demo: build a popular project through brine and report
 # the cold-vs-receipt timing difference. No external services — the
 # receipt store is local to the runner.
 
@@ -23,7 +23,7 @@ env:
   # The clone gains untracked files between phases (out/plain exists
   # when phase 2 runs), and go embeds vcs.modified — a legitimately
   # different binary per phase. Disable stamping for a deterministic
-  # demo; the cimemo buildinfo AUDIT reports exactly this class.
+  # demo; the brine buildinfo AUDIT reports exactly this class.
   GOFLAGS: -buildvcs=false
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go build -o /tmp/cimemo ./cmd/cimemo
+      - run: go build -o /tmp/brine ./cmd/brine
 
       - name: clone the target project (pinned)
         run: |
@@ -51,47 +51,47 @@ jobs:
           echo "PLAIN_COLD=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
           sha256sum out/plain | cut -d' ' -f1 > /tmp/sha-plain
 
-      - name: phase 2 — cimemo cold (builds + stores receipt)
+      - name: phase 2 — brine cold (builds + stores receipt)
         run: |
           cd /tmp/project
-          rm -rf /tmp/gc out/cimemo && mkdir -p /tmp/gc
+          rm -rf /tmp/gc out/brine && mkdir -p /tmp/gc
           START=$(date +%s%3N)
-          GOCACHE=/tmp/gc /tmp/cimemo go build -o out/cimemo ${{ inputs.package }} 2>&1 | tee /tmp/cimemo-cold.log
+          GOCACHE=/tmp/gc /tmp/brine go build -o out/brine ${{ inputs.package }} 2>&1 | tee /tmp/brine-cold.log
           echo "CIMEMO_COLD=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
-          sha256sum out/cimemo | cut -d' ' -f1 > /tmp/sha-cimemo
+          sha256sum out/brine | cut -d' ' -f1 > /tmp/sha-brine
 
-      - name: phase 3 — cimemo receipt (outputs and go cache wiped)
+      - name: phase 3 — brine receipt (outputs and go cache wiped)
         run: |
           cd /tmp/project
-          rm -rf /tmp/gc out/cimemo && mkdir -p /tmp/gc
+          rm -rf /tmp/gc out/brine && mkdir -p /tmp/gc
           START=$(date +%s%3N)
-          GOCACHE=/tmp/gc /tmp/cimemo go build -o out/cimemo ${{ inputs.package }} 2>&1 | tee /tmp/cimemo-receipt.log
+          GOCACHE=/tmp/gc /tmp/brine go build -o out/brine ${{ inputs.package }} 2>&1 | tee /tmp/brine-receipt.log
           echo "CIMEMO_RECEIPT=$(( $(date +%s%3N) - START ))" >> "$GITHUB_ENV"
 
       - name: verdict + summary
         run: |
           cd /tmp/project
           SHA_PLAIN=$(cat /tmp/sha-plain)
-          SHA_CIMEMO=$(sha256sum out/cimemo | cut -d' ' -f1)
+          SHA_CIMEMO=$(sha256sum out/brine | cut -d' ' -f1)
           if [ "$SHA_PLAIN" = "$SHA_CIMEMO" ]; then VERDICT="byte-identical"; else VERDICT="MISMATCH"; fi
           SPEEDUP=$(echo "scale=1; $PLAIN_COLD / $CIMEMO_RECEIPT" | bc)
           {
-            echo "## cimemo integration — ${{ inputs.repo }} @ ${{ inputs.ref }}"
+            echo "## brine integration — ${{ inputs.repo }} @ ${{ inputs.ref }}"
             echo
             echo "| phase | wall |"
             echo "|---|---|"
             echo "| plain cold build | ${PLAIN_COLD}ms |"
-            echo "| cimemo cold (build + store receipt) | ${CIMEMO_COLD}ms |"
-            echo "| cimemo receipt (cache + outputs wiped) | ${CIMEMO_RECEIPT}ms |"
+            echo "| brine cold (build + store receipt) | ${CIMEMO_COLD}ms |"
+            echo "| brine receipt (cache + outputs wiped) | ${CIMEMO_RECEIPT}ms |"
             echo
             echo "Receipt vs plain build: **${VERDICT}** — speedup **${SPEEDUP}x**"
             echo
             echo '```'
-            grep -E "\[cimemo\]" /tmp/cimemo-receipt.log | head -5
+            grep -E "\[brine\]" /tmp/brine-receipt.log | head -5
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$VERDICT" != "byte-identical" ]; then
             echo "--- dissection of the difference:"
-            /tmp/cimemo dissect out/plain out/cimemo 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+            /tmp/brine dissect out/plain out/brine 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           [ "$VERDICT" = "byte-identical" ]

@@ -32,7 +32,7 @@ func snapshotFixture(t *testing.T) (dir string, builtAt int64) {
 
 func TestSnapshotOutputsOutputOnly(t *testing.T) {
 	dir, builtAt := snapshotFixture(t)
-	s, _ := New(filepath.Join(dir, ".cimemo"))
+	s, _ := New(filepath.Join(dir, ".brine"))
 
 	readSet := []string{"input.go"}
 	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt)
@@ -60,7 +60,7 @@ func TestSnapshotOutputsOutputOnly(t *testing.T) {
 
 func TestRestoreVerifiesBlobIntegrity(t *testing.T) {
 	dir, builtAt := snapshotFixture(t)
-	s, _ := New(filepath.Join(dir, ".cimemo"))
+	s, _ := New(filepath.Join(dir, ".brine"))
 	m, err := s.SnapshotOutputs("k", dir, []string{"input.go"}, builtAt)
 	if err != nil {
 		t.Fatal(err)
@@ -81,13 +81,13 @@ func TestRestoreVerifiesBlobIntegrity(t *testing.T) {
 	os.WriteFile(blobPath, data, 0o644)
 
 	// Restore MUST refuse (never serve wrong bytes).
-	t.Setenv("CIMEMO_TRUST_LOCAL", "")
+	t.Setenv("BRINE_TRUST_LOCAL", "")
 	if _, _, err := s.RestoreManifest(m, dir); err == nil {
 		t.Fatal("corrupted local blob must make RestoreManifest fail")
 	}
 
 	// And with trust-local set (explicit opt-out), it proceeds.
-	t.Setenv("CIMEMO_TRUST_LOCAL", "1")
+	t.Setenv("BRINE_TRUST_LOCAL", "1")
 	if _, _, err := s.RestoreManifest(m, dir); err != nil {
 		t.Fatalf("trust-local restore should proceed: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestValidateIgnoresOutputDirListings(t *testing.T) {
 	// The collector case: nested output roots (out/libs), wiped
 	// outputs, path-vs-name keyspace, root-dir join.
 	dir, builtAt := snapshotFixture(t)
-	s, _ := New(filepath.Join(dir, ".cimemo"))
+	s, _ := New(filepath.Join(dir, ".brine"))
 	// After filterBuildState, read-sets exclude output-tree entries
 	// (fact case study: cargo fingerprint state is not an input).
 	readSet := []string{"input.go"}
@@ -148,7 +148,7 @@ func TestValidateRootDirListing(t *testing.T) {
 	// the listing hash must exclude it via path.Join semantics
 	// ("./out" keyspace bug).
 	dir, builtAt := snapshotFixture(t)
-	s, _ := New(filepath.Join(dir, ".cimemo"))
+	s, _ := New(filepath.Join(dir, ".brine"))
 	readSet := []string{"input.go"}
 	m, _ := s.SnapshotOutputs("k", dir, readSet, builtAt)
 	m.BuiltAt = builtAt
@@ -170,7 +170,7 @@ func TestValidateRootDirListing(t *testing.T) {
 
 func TestLatestForClosure(t *testing.T) {
 	dir, builtAt := snapshotFixture(t)
-	s, _ := New(filepath.Join(dir, ".cimemo"))
+	s, _ := New(filepath.Join(dir, ".brine"))
 	readSet := []string{"input.go"}
 
 	m1, _ := s.SnapshotOutputs("k1", dir, readSet, builtAt)

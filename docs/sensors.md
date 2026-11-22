@@ -17,13 +17,13 @@ this command depend on?" with a different soundness/cost profile.
 
 ## Warm mode (cache pre-seeding from history)
 
-Replay git history through cimemo to pre-seed the cache:
+Replay git history through brine to pre-seed the cache:
 
-    cimemo warm --last 10 make          # replay last 10 commits
-    cimemo warm --since v1.2.0 make     # replay from a tag
+    brine warm --last 10 make          # replay last 10 commits
+    brine warm --since v1.2.0 make     # replay from a tag
 
 Each commit is checked out (oldest first), the build command runs
-through cimemo, receipts accumulate. The warming curve report shows
+through brine, receipts accumulate. The warming curve report shows
 cold vs warm per commit and cumulative hit rate.
 
 Validated on k8swatch: first pass = 5 cold builds (4.1s total), second
@@ -43,7 +43,7 @@ Connecting them gives the data-flow graph — the equivalent of a CI
 `needs:` chain, derived from observation:
 
 ```
-cimemo graph
+brine graph
   configure.sh → cc -o program main.c (via generated.h)
 ```
 
@@ -58,7 +58,7 @@ change).
 |---|--------|------|--------|
 | 7 | compiler dep-files (gcc/clang `-MD`) | exact | **implemented**: `depfiles` package — parses .d files for exact C/C++ header closures; wired into read-set discovery; 8 tests |
 | 8 | dry-run/verbose traces (`make -n`, `tsc --listFiles`) | exact | stub; needs a Makefile-based project |
-| ~~10~~ | ~~coverage profiles (test selection)~~ | — | **out of scope**: selection changes what runs (a prediction); cimemo memoizes what ran (deterministic). Coverage data may feed closure discovery; the selection logic is a different tool. |
+| ~~10~~ | ~~coverage profiles (test selection)~~ | — | **out of scope**: selection changes what runs (a prediction); brine memoizes what ran (deterministic). Coverage data may feed closure discovery; the selection logic is a different tool. |
 | 11 | git history mining (seed model from co-changes) | statistical | stub |
 | 12 | BuildKit/Docker layer provenance | exact | docker image receipts exist; layer-level provenance is the deeper form |
 
@@ -78,7 +78,7 @@ an OUTPUT of that build — never an input — regardless of what the
 read-set says. This resolves: make's freshness-check opens (reads of
 outputs), configs generated inside the invocation, committed artifacts
 rewritten by the build. See `observe/writes.go` for implementation;
-`filterBuildState` in `cmd/cimemo/main.go` applies it.
+`filterBuildState` in `cmd/brine/main.go` applies it.
 
 ## Invisible input classes
 
@@ -89,4 +89,4 @@ Things git cannot see, each with its own mechanism:
 | untracked config files | read-set patterns (`config.h`, `CMakeCache.txt`, ...) | case A/B testing |
 | env vars | `key_env` declaration (cannot be observed) | B2: stale serve |
 | submodule contents | gitlink pseudo-inputs (`path@gitlink:<HEAD>`) | fact case study |
-| gitignored configs | `key_files` in `.cimemo.json` (record mode discovers) | gitignore scan |
+| gitignored configs | `key_files` in `.brine.json` (record mode discovers) | gitignore scan |

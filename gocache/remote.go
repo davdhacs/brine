@@ -18,7 +18,7 @@
 //
 // Auth: SPN client credentials (AZURE_TENANT_ID / AZURE_CLIENT_ID /
 // AZURE_CLIENT_SECRET — the CI path), or a pre-minted bearer token in
-// CIMEMO_AZURE_TOKEN (the `az account get-access-token` dev path).
+// BRINE_AZURE_TOKEN (the `az account get-access-token` dev path).
 package gocache
 
 import (
@@ -57,22 +57,22 @@ type Remote struct {
 }
 
 // NewRemoteFromEnv returns a Remote when remote mode is enabled
-// (CIMEMO_GOCACHE_REMOTE=1), else nil.
+// (BRINE_GOCACHE_REMOTE=1), else nil.
 func NewRemoteFromEnv() *Remote {
-	if os.Getenv("CIMEMO_GOCACHE_REMOTE") != "1" {
+	if os.Getenv("BRINE_GOCACHE_REMOTE") != "1" {
 		return nil
 	}
-	account := os.Getenv("CIMEMO_AZURE_ACCOUNT")
+	account := os.Getenv("BRINE_AZURE_ACCOUNT")
 	if account == "" {
 		return nil // remote off without an explicit account — never assume one
 	}
 	r := &Remote{
 		account:   account,
-		container: envOr("CIMEMO_GOCACHE_CONTAINER", "cimemo"),
+		container: envOr("BRINE_GOCACHE_CONTAINER", "brine"),
 		tenantID:  os.Getenv("AZURE_TENANT_ID"),
 		clientID:  os.Getenv("AZURE_CLIENT_ID"),
 		secret:    os.Getenv("AZURE_CLIENT_SECRET"),
-		staticTok: os.Getenv("CIMEMO_AZURE_TOKEN"),
+		staticTok: os.Getenv("BRINE_AZURE_TOKEN"),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			// Default Transport keeps only 2 idle conns per host — with
@@ -111,7 +111,7 @@ func (r *Remote) getToken() (string, error) {
 		return r.token, nil
 	}
 	if r.tenantID == "" || r.clientID == "" || r.secret == "" {
-		return "", fmt.Errorf("remote: no credentials (set AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET or CIMEMO_AZURE_TOKEN)")
+		return "", fmt.Errorf("remote: no credentials (set AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET or BRINE_AZURE_TOKEN)")
 	}
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", r.tenantID)
 	// url.Values.Encode, NOT raw Sprintf: secrets contain '+&%' that
@@ -302,7 +302,7 @@ func queueCloudPut(r *Remote, actionIDHex, outputIDHex, dataFilePath string, siz
 }
 
 // PutIfNotExistPub / PutPub / ExistsPub: exported wrappers for the
-// cimemo store package (receipts + output blobs share this backend).
+// brine store package (receipts + output blobs share this backend).
 func (r *Remote) PutIfNotExistPub(key string, body []byte) (bool, error) {
 	return r.putIfNotExist(key, body)
 }

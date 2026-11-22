@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/davdhacs/cimemo/gocache"
+	"github.com/davdhacs/brine/gocache"
 )
 
-// Remote tier for the cimemo blob store: manifests and output blobs in
+// Remote tier for the brine blob store: manifests and output blobs in
 // Azure, namespaced under store/ (the gocache proxy uses a/, d/, m/ —
 // no collision). Level-1 receipts become cross-machine: a fresh runner
 // computes the input key, fetches the manifest, restores the outputs —

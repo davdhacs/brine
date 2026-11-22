@@ -1,4 +1,4 @@
-// cimemo: content-addressed memoization for any build command.
+// brine: content-addressed memoization for any build command.
 //
 // v0.4 architecture — multi-sensor with learned edges (see docs/sensors.md):
 //
@@ -31,15 +31,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/davdhacs/cimemo/buildinfo"
-	"github.com/davdhacs/cimemo/depfiles"
-	"github.com/davdhacs/cimemo/dissect"
-	"github.com/davdhacs/cimemo/gocache"
-	"github.com/davdhacs/cimemo/key"
-	"github.com/davdhacs/cimemo/model"
-	"github.com/davdhacs/cimemo/observe"
-	"github.com/davdhacs/cimemo/pinaudit"
-	"github.com/davdhacs/cimemo/store"
+	"github.com/davdhacs/brine/buildinfo"
+	"github.com/davdhacs/brine/depfiles"
+	"github.com/davdhacs/brine/dissect"
+	"github.com/davdhacs/brine/gocache"
+	"github.com/davdhacs/brine/key"
+	"github.com/davdhacs/brine/model"
+	"github.com/davdhacs/brine/observe"
+	"github.com/davdhacs/brine/pinaudit"
+	"github.com/davdhacs/brine/store"
 )
 
 const version = "0.4.0"
@@ -60,9 +60,9 @@ func main() {
 			// Reserved: allow learned edges to serve hits. Not yet
 			// implemented — predictions stay advisory until they've
 			// survived audit validation, and even then only per-output.
-			fmt.Fprintln(os.Stderr, "[cimemo] --trust-learned is not implemented yet; predictions stay advisory")
+			fmt.Fprintln(os.Stderr, "[brine] --trust-learned is not implemented yet; predictions stay advisory")
 		default:
-			fmt.Fprintf(os.Stderr, "[cimemo] unknown flag %s\n", args[0])
+			fmt.Fprintf(os.Stderr, "[brine] unknown flag %s\n", args[0])
 			usage()
 		}
 		args = args[1:]
@@ -75,7 +75,7 @@ func main() {
 	case args[0] == "gocache":
 		// GOCACHEPROG entry point: re-exec'ed by `go` as the external
 		// build cache. Pass-through over the standard GOCACHE layout,
-		// writing a miss log to CIMEMO_GOCACHE_STATS.
+		// writing a miss log to BRINE_GOCACHE_STATS.
 		if err := gocache.Serve(); err != nil {
 			fatal("gocache: %v", err)
 		}
@@ -105,11 +105,11 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "cimemo v%s — content-addressed memoization\n", version)
+	fmt.Fprintf(os.Stderr, "brine v%s — content-addressed memoization\n", version)
 	fmt.Fprintf(os.Stderr, "\nUsage:\n")
-	fmt.Fprintf(os.Stderr, "  cimemo [--shadow] <command> [args...]  memoize a command\n")
-	fmt.Fprintf(os.Stderr, "  cimemo audit <command> [args...]       force full rebuild + score model\n")
-	fmt.Fprintf(os.Stderr, "  cimemo status | gc | clear\n")
+	fmt.Fprintf(os.Stderr, "  brine [--shadow] <command> [args...]  memoize a command\n")
+	fmt.Fprintf(os.Stderr, "  brine audit <command> [args...]       force full rebuild + score model\n")
+	fmt.Fprintf(os.Stderr, "  brine status | gc | clear\n")
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
 	fmt.Fprintf(os.Stderr, "  --shadow   score learned predictions without trusting them\n")
 	os.Exit(1)
@@ -119,18 +119,18 @@ func cmdMemoize(args []string, forceFull bool) {
 	command := strings.Join(args, " ")
 	wd, _ := os.Getwd()
 
-	st, err := store.New(filepath.Join(wd, ".cimemo"))
+	st, err := store.New(filepath.Join(wd, ".brine"))
 	if err != nil {
 		fatal("store: %v", err)
 	}
-	// CIMEMO_REMOTE=1: receipts + output blobs in the cloud store, and
+	// BRINE_REMOTE=1: receipts + output blobs in the cloud store, and
 	// the gocache proxy's remote tier on for Go commands (both levels
 	// share the backend and container).
-	if os.Getenv("CIMEMO_REMOTE") == "1" {
-		os.Setenv("CIMEMO_GOCACHE_REMOTE", "1")
+	if os.Getenv("BRINE_REMOTE") == "1" {
+		os.Setenv("BRINE_GOCACHE_REMOTE", "1")
 		st.SetRemote(gocache.NewRemoteFromEnv())
 	}
-	mod, err := model.Load(filepath.Join(wd, ".cimemo", "model.json"))
+	mod, err := model.Load(filepath.Join(wd, ".brine", "model.json"))
 	if err != nil {
 		fatal("model: %v", err)
 	}
@@ -151,7 +151,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// Untracked config artifacts are candidate inputs — added to the
 	// read-set BEFORE the writes filter: a config the build generates
 	// gets removed by that filter (it is an output); a config written
-	// outside cimemo (manual ./configure) stays and is hashed like any
+	// outside brine (manual ./configure) stays and is hashed like any
 	// input, catching config flips.
 	// === Commit-receipt fast path ===
 	// A clean tree at HEAD is exactly determined: SHA → tree → closure.
@@ -173,7 +173,7 @@ func cmdMemoize(args []string, forceFull bool) {
 				skipFast := false
 				for _, cfg := range untrackedConfigs(wd) {
 					if !blobSet[cfg] {
-						fmt.Printf("[cimemo] commit receipt skipped: untracked config %s is not produced by this receipt\n", cfg)
+						fmt.Printf("[brine] commit receipt skipped: untracked config %s is not produced by this receipt\n", cfg)
 						skipFast = true
 						break
 					}
@@ -181,8 +181,8 @@ func cmdMemoize(args []string, forceFull bool) {
 				if !skipFast {
 					verifyRestored(m, wd)
 					if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
-						fmt.Printf("[cimemo] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
-						fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
+						fmt.Printf("[brine] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
+						fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 							count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
 						recordHit(mod, command)
 						return
@@ -204,26 +204,26 @@ func cmdMemoize(args []string, forceFull bool) {
 			tailOK := m.KeyTail == tailNow
 			vcsOK := !isGo || !vcsFoldActive() || m.VCSCommit == gitHead(wd)
 			if !toolchainOK {
-				fmt.Printf("[cimemo] MISS: toolchain changed\n")
+				fmt.Printf("[brine] MISS: toolchain changed\n")
 			} else if !tailOK {
-				fmt.Printf("[cimemo] MISS: untracked config or key env changed\n")
+				fmt.Printf("[brine] MISS: untracked config or key env changed\n")
 			} else if !vcsOK {
-				fmt.Printf("[cimemo] MISS: commit changed (VCS-stamped build)\n")
+				fmt.Printf("[brine] MISS: commit changed (VCS-stamped build)\n")
 			} else if valid, reasons := st.Validate(m, wd); valid {
 				if len(m.ImageOutputs) > 0 {
 					// Image receipt: re-tag instead of restoring files.
 					allOK := true
 					for _, ref := range m.ImageOutputs {
 						if err := dockerRetag(ref.ImageID, ref.Tag); err != nil {
-							fmt.Fprintf(os.Stderr, "[cimemo] retag %s failed: %v — rebuilding\n", ref.Tag, err)
+							fmt.Fprintf(os.Stderr, "[brine] retag %s failed: %v — rebuilding\n", ref.Tag, err)
 							allOK = false
 							break
 						}
 					}
 					if allOK {
-						fmt.Printf("[cimemo] CACHE HIT (image re-tag): %s\n", m.Key)
+						fmt.Printf("[brine] CACHE HIT (image re-tag): %s\n", m.Key)
 						for _, ref := range m.ImageOutputs {
-							fmt.Printf("[cimemo]   %s -> %s\n", ref.ImageID[:19], ref.Tag)
+							fmt.Printf("[brine]   %s -> %s\n", ref.ImageID[:19], ref.Tag)
 						}
 						recordHit(mod, command)
 						return
@@ -231,17 +231,17 @@ func cmdMemoize(args []string, forceFull bool) {
 				}
 				count, bytes, err := st.RestoreManifest(m, wd)
 				if err == nil {
-					fmt.Printf("[cimemo] CACHE HIT: %s\n", m.Key)
-					fmt.Printf("[cimemo]   %d outputs, %.1f MB, strategy=%s (%s)\n",
+					fmt.Printf("[brine] CACHE HIT: %s\n", m.Key)
+					fmt.Printf("[brine]   %d outputs, %.1f MB, strategy=%s (%s)\n",
 						count, float64(bytes)/1024/1024, m.Strategy,
 						time.Since(start).Round(time.Millisecond))
 					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
 					recordHit(mod, command)
 					return
 				}
-				fmt.Fprintf(os.Stderr, "[cimemo] restore error: %v — rebuilding\n", err)
+				fmt.Fprintf(os.Stderr, "[brine] restore error: %v — rebuilding\n", err)
 			} else {
-				fmt.Printf("[cimemo] MISS: %s\n", store.FormatReasons(reasons))
+				fmt.Printf("[brine] MISS: %s\n", store.FormatReasons(reasons))
 			}
 		}
 	}
@@ -266,9 +266,9 @@ func cmdMemoize(args []string, forceFull bool) {
 						for _, t := range dockerBuildTags(args) {
 							dockerRetag(m.ImageOutputs[0].ImageID, t)
 						}
-						fmt.Printf("[cimemo] CACHE HIT (image re-tag): %s\n", dk)
+						fmt.Printf("[brine] CACHE HIT (image re-tag): %s\n", dk)
 						for _, ref := range m.ImageOutputs {
-							fmt.Printf("[cimemo]   %s -> %s\n", ref.ImageID[:19], ref.Tag)
+							fmt.Printf("[brine]   %s -> %s\n", ref.ImageID[:19], ref.Tag)
 						}
 						recordHit(mod, command)
 						return
@@ -288,7 +288,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		closure = "go list -deps " + strings.Join(goPatterns, " ")
 		readSet, err = key.GoClosure(wd, goPatterns)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[cimemo] %v — running un-memoized\n", err)
+			fmt.Fprintf(os.Stderr, "[brine] %v — running un-memoized\n", err)
 			runPlain(args)
 			return
 		}
@@ -299,12 +299,12 @@ func cmdMemoize(args []string, forceFull bool) {
 				if err != nil {
 					// Integrity failure or missing blob: visible, then
 					// self-heal via rebuild (never serve wrong bytes).
-					fmt.Fprintf(os.Stderr, "[cimemo] receipt restore failed: %v — rebuilding\n", err)
+					fmt.Fprintf(os.Stderr, "[brine] receipt restore failed: %v — rebuilding\n", err)
 				}
 				if err == nil {
 					verifyRestored(m, wd)
-					fmt.Printf("[cimemo] CACHE HIT (keyed): %s — closure re-derived\n", k)
-					fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
+					fmt.Printf("[brine] CACHE HIT (keyed): %s — closure re-derived\n", k)
+					fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 						count, float64(bytes)/1024/1024,
 						time.Since(start).Round(time.Millisecond))
 					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
@@ -326,13 +326,21 @@ func cmdMemoize(args []string, forceFull bool) {
 			pred, conservative := mod.Predict(shadowChanged)
 			shadowPrediction = pred
 			if conservative {
-				fmt.Printf("[cimemo] shadow: %d changed inputs include unknown files → prediction: conservative (all outputs)\n",
+				fmt.Printf("[brine] shadow: %d changed inputs include unknown files → prediction: conservative (all outputs)\n",
 					len(shadowChanged))
 			} else {
-				fmt.Printf("[cimemo] shadow: %d changed inputs → prediction: %d output(s) affected\n",
+				fmt.Printf("[brine] shadow: %d changed inputs → prediction: %d output(s) affected\n",
 					len(shadowChanged), len(pred))
 			}
 		}
+	}
+
+	// Prepare go builds: mtime normalization + VCS stamp disabling.
+	// These fix the systematic action-cache invalidation that git
+	// checkout causes (mtime reset on unchanged files → package-index
+	// hash differs → ~25% of cache entries miss on every commit).
+	if isGo {
+		prepareGoBuild(wd)
 	}
 
 	// Auto-configure protocol caches (ccache for C/C++, sccache for
@@ -340,7 +348,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// three languages alongside GOCACHEPROG for Go.
 	pc := detectProtocolCache(wd, args)
 	if pc != nil {
-		fmt.Printf("[cimemo] protocol-cache: %s configured\n", pc.Tool)
+		fmt.Printf("[brine] protocol-cache: %s configured\n", pc.Tool)
 	}
 
 	// Write tracking (non-go commands): fsnotify events give exact
@@ -379,8 +387,8 @@ func cmdMemoize(args []string, forceFull bool) {
 						if match {
 							count, bytes, err := st.RestoreManifest(m, wd)
 							if err == nil {
-								fmt.Printf("[cimemo] CACHE HIT (keyed): %s\n", pk)
-								fmt.Printf("[cimemo]   %d outputs, %.1f MB (%s)\n",
+								fmt.Printf("[brine] CACHE HIT (keyed): %s\n", pk)
+								fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 									count, float64(bytes)/1024/1024,
 									time.Since(start).Round(time.Millisecond))
 								storeCommitReceiptIfClean(st, m, wd, command, toolchain)
@@ -396,9 +404,9 @@ func cmdMemoize(args []string, forceFull bool) {
 
 	// === Run the command ===
 	if forceFull {
-		fmt.Printf("[cimemo] audit: forcing full rebuild\n")
+		fmt.Printf("[brine] audit: forcing full rebuild\n")
 	} else {
-		fmt.Printf("[cimemo] running: %s\n", command)
+		fmt.Printf("[brine] running: %s\n", command)
 	}
 	buildStart := time.Now()
 	builtAt := buildStart.UnixNano()
@@ -416,11 +424,11 @@ func cmdMemoize(args []string, forceFull bool) {
 	var statsPath string
 	if isGo {
 		if self, err := os.Executable(); err == nil {
-			statsPath = filepath.Join(wd, ".cimemo", fmt.Sprintf("gocache-stats-%d.json", os.Getpid()))
+			statsPath = filepath.Join(wd, ".brine", fmt.Sprintf("gocache-stats-%d.json", os.Getpid()))
 			cmd.Env = append(os.Environ(),
 				"GOCACHEPROG="+self+" gocache",
-				"CIMEMO_GOCACHE_STATS="+statsPath,
-				"CIMEMO_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
+				"BRINE_GOCACHE_STATS="+statsPath,
+				"BRINE_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
 		}
 	}
 
@@ -451,7 +459,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	if statsPath != "" {
 		if st, err := gocache.ReadStats(statsPath); err == nil && st.Gets+st.Puts > 0 {
 			actionStats = st
-			fmt.Printf("[cimemo] gocache: %d gets (%d hit, %d miss), %d puts (%.1f MB)\n",
+			fmt.Printf("[brine] gocache: %d gets (%d hit, %d miss), %d puts (%.1f MB)\n",
 				st.Gets, st.Hits, st.Misses, st.Puts, float64(st.PutBytes)/1024/1024)
 		}
 		os.Remove(statsPath)
@@ -485,7 +493,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		if found := depfiles.Find(wd); len(found) > 0 {
 			depFileClosure = depfiles.Closure(wd)
 			if len(depFileClosure) > 0 {
-				fmt.Printf("[cimemo] dep-files: %d .d files → %d exact dependencies\n",
+				fmt.Printf("[brine] dep-files: %d .d files → %d exact dependencies\n",
 					len(found), len(depFileClosure))
 			}
 		}
@@ -546,12 +554,12 @@ func cmdMemoize(args []string, forceFull bool) {
 				readSet = filterWrites(filterBuildState(wd,
 					unionFiles(allFiles, untrackedConfigs(wd)), builtAt))
 				strategy = "no-vcs"
-				fmt.Printf("[cimemo] no VCS found — using all %d project files as closure (over-inclusive, sound)\n", len(readSet))
+				fmt.Printf("[brine] no VCS found — using all %d project files as closure (over-inclusive, sound)\n", len(readSet))
 			}
 		}
 	}
 	if len(readSet) == 0 {
-		fmt.Printf("[cimemo] no read-set derivable (observed raw=%d, git ok=%v) — output not cached\n",
+		fmt.Printf("[brine] no read-set derivable (observed raw=%d, git ok=%v) — output not cached\n",
 			len(reads.Files(wd)), gitTrackedFiles(wd) != nil)
 		return
 	}
@@ -653,8 +661,8 @@ func cmdMemoize(args []string, forceFull bool) {
 		if info, err := buildinfo.Inspect(filepath.Join(wd, ref.Path)); err == nil && info != nil {
 			m.BuildInfo = info
 			for _, f := range buildinfo.Audit(info, command) {
-				fmt.Printf("[cimemo] AUDIT %s: %s\n", f.Kind, f.Detail)
-				fmt.Printf("[cimemo]   warn: %s\n", f.Warning)
+				fmt.Printf("[brine] AUDIT %s: %s\n", f.Kind, f.Detail)
+				fmt.Printf("[brine]   warn: %s\n", f.Warning)
 			}
 			break // first go binary is the story; others are similar
 		}
@@ -669,15 +677,15 @@ func cmdMemoize(args []string, forceFull bool) {
 	}
 
 	// Effective config report: what's influencing keys that could be
-	// persisted to .cimemo.json (or already is). Only prints when there
+	// persisted to .brine.json (or already is). Only prints when there
 	// IS something non-default — silent for the zero-config case.
 	reportEffectiveConfig(wd)
 
 	// Pin audit (config determinism): floating dependency references
 	// make builds nondeterministic and caches unreliable — name them.
 	for _, f := range pinaudit.Audit(wd) {
-		fmt.Printf("[cimemo] AUDIT %s (%s): %s\n", f.Kind, f.File, f.Detail)
-		fmt.Printf("[cimemo]   warn: %s\n", f.Warning)
+		fmt.Printf("[brine] AUDIT %s (%s): %s\n", f.Kind, f.File, f.Detail)
+		fmt.Printf("[brine]   warn: %s\n", f.Warning)
 	}
 
 	// Cross-command dependency graph: proactively invalidate the
@@ -688,15 +696,15 @@ func cmdMemoize(args []string, forceFull bool) {
 		graph := NewStoreAdapter(wd)
 		edges := BuildCommandGraph(graph)
 		if invalidated := InvalidateDependents(graph, edges, command); len(invalidated) > 0 {
-			fmt.Printf("[cimemo] graph: invalidated %d dependent receipt(s):\n", len(invalidated))
+			fmt.Printf("[brine] graph: invalidated %d dependent receipt(s):\n", len(invalidated))
 			for _, dep := range invalidated {
-				fmt.Printf("[cimemo]   %s\n", shortCmd(dep))
+				fmt.Printf("[brine]   %s\n", shortCmd(dep))
 			}
 		}
 	}
 
-	fmt.Printf("[cimemo] CACHED: %s\n", k)
-	fmt.Printf("[cimemo]   %d outputs, %.1f MB, %d inputs, strategy=%s (build: %s)\n",
+	fmt.Printf("[brine] CACHED: %s\n", k)
+	fmt.Printf("[brine]   %d outputs, %.1f MB, %d inputs, strategy=%s (build: %s)\n",
 		len(m.Blobs), float64(sumSizes(m.Blobs))/1024/1024,
 		len(readSet), strategy, buildTime.Round(time.Millisecond))
 
@@ -715,21 +723,21 @@ func cmdMemoize(args []string, forceFull bool) {
 	if forceFull && prev != nil && len(shadowChanged) > 0 {
 		actualChanged := diffOutputHashes(prev.Outputs, m.OutputHashes())
 		rep := mod.Score(shadowChanged, actualChanged)
-		fmt.Printf("[cimemo] audit: ground truth — %d output(s) changed; prediction had %d\n",
+		fmt.Printf("[brine] audit: ground truth — %d output(s) changed; prediction had %d\n",
 			len(actualChanged), len(shadowPrediction))
 		if len(rep.MissedEdges) > 0 {
-			fmt.Printf("[cimemo] audit: %d missed edge(s) repaired into model\n", len(rep.MissedEdges))
+			fmt.Printf("[brine] audit: %d missed edge(s) repaired into model\n", len(rep.MissedEdges))
 		}
 		if rep.Spurious > 0 {
-			fmt.Printf("[cimemo] audit: %d spurious prediction(s) (imprecision, not error)\n", rep.Spurious)
+			fmt.Printf("[brine] audit: %d spurious prediction(s) (imprecision, not error)\n", rep.Spurious)
 		}
-		fmt.Printf("[cimemo] audit: recall %.0f%%\n", rep.Recall*100)
+		fmt.Printf("[brine] audit: recall %.0f%%\n", rep.Recall*100)
 	} else if forceFull && prev == nil {
-		fmt.Printf("[cimemo] audit: baseline recorded (no prior full build to score against)\n")
+		fmt.Printf("[brine] audit: baseline recorded (no prior full build to score against)\n")
 	}
 
 	if err := mod.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "[cimemo] model save: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[brine] model save: %v\n", err)
 	}
 }
 
@@ -747,7 +755,7 @@ func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyComman
 		cm.Key = ck
 		cm.KeyKind = "commit"
 		if err := st.PutManifest(&cm); err == nil {
-			fmt.Printf("[cimemo] commit receipt: %s\n", ck)
+			fmt.Printf("[brine] commit receipt: %s\n", ck)
 		}
 	}
 }
@@ -757,7 +765,7 @@ func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyComman
 func recordHit(mod *model.Model, command string) {
 	mod.RecordBuild(model.BuildRecord{Time: time.Now(), Command: command, Full: false})
 	if err := mod.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "[cimemo] model save: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[brine] model save: %v\n", err)
 	}
 }
 
@@ -828,9 +836,9 @@ func runPlain(args []string) {
 
 func cmdStatus() {
 	wd, _ := os.Getwd()
-	storeDir := filepath.Join(wd, ".cimemo")
+	storeDir := filepath.Join(wd, ".brine")
 	if _, err := os.Stat(storeDir); os.IsNotExist(err) {
-		fmt.Println("no cache (run cimemo <command> first)")
+		fmt.Println("no cache (run brine <command> first)")
 		return
 	}
 
@@ -876,31 +884,31 @@ func cmdGC(args []string) {
 		}
 	}
 	wd, _ := os.Getwd()
-	st, err := store.New(filepath.Join(wd, ".cimemo"))
+	st, err := store.New(filepath.Join(wd, ".brine"))
 	if err != nil {
 		fatal("store: %v", err)
 	}
-	// CIMEMO_REMOTE=1: receipts + output blobs in the cloud store, and
+	// BRINE_REMOTE=1: receipts + output blobs in the cloud store, and
 	// the gocache proxy's remote tier on for Go commands (both levels
 	// share the backend and container).
-	if os.Getenv("CIMEMO_REMOTE") == "1" {
-		os.Setenv("CIMEMO_GOCACHE_REMOTE", "1")
+	if os.Getenv("BRINE_REMOTE") == "1" {
+		os.Setenv("BRINE_GOCACHE_REMOTE", "1")
 		st.SetRemote(gocache.NewRemoteFromEnv())
 	}
 	freed, removed, err := st.GC(maxAge)
 	if err != nil {
 		fatal("gc: %v", err)
 	}
-	fmt.Printf("[cimemo] GC: freed %.1f MB, removed %d items (max age: %s)\n",
+	fmt.Printf("[brine] GC: freed %.1f MB, removed %d items (max age: %s)\n",
 		float64(freed)/1024/1024, removed, maxAge)
 }
 
 func cmdClear() {
 	wd, _ := os.Getwd()
-	if err := os.RemoveAll(filepath.Join(wd, ".cimemo")); err != nil {
+	if err := os.RemoveAll(filepath.Join(wd, ".brine")); err != nil {
 		fatal("clear: %v", err)
 	}
-	fmt.Println("[cimemo] cache cleared")
+	fmt.Println("[brine] cache cleared")
 }
 
 func gitTrackedFiles(dir string) []string {
@@ -910,7 +918,7 @@ func gitTrackedFiles(dir string) []string {
 	// its build reads protos from third_party/stackrox). Replace each
 	// gitlink with the submodule's HEAD commit as a pseudo-input.
 	// -c safe.directory: tar-copied and container checkouts trip git's
-	// ownership check, silently degrading cimemo to no-cache (found in
+	// ownership check, silently degrading brine to no-cache (found in
 	// the fact-in-container case study).
 	cmd := exec.Command("git", "-C", dir, "-c", "safe.directory="+dir, "ls-files", "-s")
 	out, err := cmd.Output()
@@ -950,13 +958,13 @@ func sha256Sum(data []byte) []byte {
 }
 
 func fatal(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "[cimemo] ERROR: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "[brine] ERROR: "+format+"\n", args...)
 	os.Exit(1)
 }
 
 // vcsFoldActive reports whether VCS state participates in keys for
 // this run: stamping not provably off (GOFLAGS) and not disabled via
-// .cimemo.json.
+// .brine.json.
 func vcsFoldActive() bool {
 	if strings.Contains(os.Getenv("GOFLAGS"), "-buildvcs=false") {
 		return false
@@ -1036,7 +1044,7 @@ func gitHead(wd string) string {
 
 // vcsFold returns the key fragment that makes VCS-stamped builds
 // sound: git HEAD. Skipped when stamping is provably off (GOFLAGS
-// carries -buildvcs=false) or the user opted out via .cimemo.json
+// carries -buildvcs=false) or the user opted out via .brine.json
 // ("deterministic": {"buildvcs": "off"} — a promise that they disable
 // stamping themselves; cherry-picks then hit by content, correctly).
 func vcsFold(wd string) string {
@@ -1062,9 +1070,9 @@ func verifyRestored(m *store.Manifest, wd string) {
 			continue
 		}
 		if ok, mismatch := buildinfo.Verify(m.BuildInfo, info); !ok {
-			fmt.Printf("[cimemo] VERIFY FAILED on %s: %s — manifest may be stale\n", ref.Path, mismatch)
+			fmt.Printf("[brine] VERIFY FAILED on %s: %s — manifest may be stale\n", ref.Path, mismatch)
 		} else {
-			fmt.Printf("[cimemo] verified: %s buildinfo matches manifest\n", ref.Path)
+			fmt.Printf("[brine] verified: %s buildinfo matches manifest\n", ref.Path)
 		}
 		break
 	}
@@ -1082,27 +1090,27 @@ func warnDivergence(st *store.Store, prev, cur *store.Manifest, wd string) {
 			}
 		}
 	}
-	fmt.Printf("[cimemo] DIVERGENCE: same input closure built twice with different results\n")
-	fmt.Printf("[cimemo]   previous key %s, current key %s, outputs identical: %v\n",
+	fmt.Printf("[brine] DIVERGENCE: same input closure built twice with different results\n")
+	fmt.Printf("[brine]   previous key %s, current key %s, outputs identical: %v\n",
 		prev.Key, cur.Key, sameOutputs)
 	if sameOutputs {
-		fmt.Printf("[cimemo]   (outputs match — only the key moved: hidden input like commit/env/toolchain)\n")
+		fmt.Printf("[brine]   (outputs match — only the key moved: hidden input like commit/env/toolchain)\n")
 		return
 	}
 	// Outputs differ with identical inputs: dissect.
 	for i := range cur.Blobs {
 		if i >= len(prev.Blobs) || prev.Blobs[i].Hash != cur.Blobs[i].Hash {
-			a := filepath.Join(".cimemo", "blobs", prev.Blobs[i].Hash[:2], prev.Blobs[i].Hash)
+			a := filepath.Join(".brine", "blobs", prev.Blobs[i].Hash[:2], prev.Blobs[i].Hash)
 			b := filepath.Join(wd, cur.Blobs[i].Path)
 			if rep, err := dissect.Diff(a, b); err == nil {
 				if rep.ContentEquivalent {
-					fmt.Printf("[cimemo]   dissection of %s: content-equivalent (archive naming only) — not a divergence\n", cur.Blobs[i].Path)
+					fmt.Printf("[brine]   dissection of %s: content-equivalent (archive naming only) — not a divergence\n", cur.Blobs[i].Path)
 					return
 				}
-				fmt.Printf("[cimemo]   dissection of %s:\n", cur.Blobs[i].Path)
+				fmt.Printf("[brine]   dissection of %s:\n", cur.Blobs[i].Path)
 				for _, line := range strings.Split(rep.String(), "\n") {
 					if line != "" {
-						fmt.Printf("[cimemo]     %s\n", line)
+						fmt.Printf("[brine]     %s\n", line)
 					}
 				}
 			}
@@ -1113,7 +1121,7 @@ func warnDivergence(st *store.Store, prev, cur *store.Manifest, wd string) {
 
 // filterBuildState removes observed reads that live under OUTPUT ROOTS:
 // top-level directories containing build-fresh files (cargo's target/,
-// cimemo CI's bin-exp/). Build systems read their own intermediate
+// brine CI's bin-exp/). Build systems read their own intermediate
 // state there (cargo's fingerprints) — neither source nor stable
 // input; keeping it makes receipt validation fail whenever outputs
 // are wiped. Ancestor-mtime was tried first and is too fragile: any
@@ -1204,18 +1212,18 @@ func unionFiles(a, b []string) []string {
 }
 
 // cmdRecord: run with full instrumentation, then write discovered
-// configuration to .cimemo.json. The "learn your build" command.
+// configuration to .brine.json. The "learn your build" command.
 func cmdRecord(args []string) {
 	command := strings.Join(args, " ")
 	wd, _ := os.Getwd()
 
 	// Load/store setup
-	st, err := store.New(filepath.Join(wd, ".cimemo"))
+	st, err := store.New(filepath.Join(wd, ".brine"))
 	if err != nil {
 		fatal("store: %v", err)
 	}
-	if os.Getenv("CIMEMO_REMOTE") == "1" {
-		os.Setenv("CIMEMO_GOCACHE_REMOTE", "1")
+	if os.Getenv("BRINE_REMOTE") == "1" {
+		os.Setenv("BRINE_GOCACHE_REMOTE", "1")
 		st.SetRemote(gocache.NewRemoteFromEnv())
 	}
 
@@ -1223,7 +1231,7 @@ func cmdRecord(args []string) {
 	isGo := goPatterns != nil
 	isDocker := isDockerBuild(args)
 
-	fmt.Printf("[cimemo] record: running %s with full instrumentation\n", command)
+	fmt.Printf("[brine] record: running %s with full instrumentation\n", command)
 	buildStart := time.Now()
 	builtAt := buildStart.UnixNano()
 
@@ -1237,7 +1245,7 @@ func cmdRecord(args []string) {
 
 	pc := detectProtocolCache(wd, args)
 	if pc != nil {
-		fmt.Printf("[cimemo] record: protocol-cache %s configured\n", pc.Tool)
+		fmt.Printf("[brine] record: protocol-cache %s configured\n", pc.Tool)
 	}
 
 	reads := observe.NewReads()
@@ -1247,11 +1255,11 @@ func cmdRecord(args []string) {
 	cmd.Stderr = os.Stderr
 	if isGo {
 		if self, err := os.Executable(); err == nil {
-			statsPath := filepath.Join(wd, ".cimemo", fmt.Sprintf("gocache-stats-%d.json", os.Getpid()))
+			statsPath := filepath.Join(wd, ".brine", fmt.Sprintf("gocache-stats-%d.json", os.Getpid()))
 			cmd.Env = append(os.Environ(),
 				"GOCACHEPROG="+self+" gocache",
-				"CIMEMO_GOCACHE_STATS="+statsPath,
-				"CIMEMO_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
+				"BRINE_GOCACHE_STATS="+statsPath,
+				"BRINE_GOCACHE_SCOPE="+strings.Join(goPatterns, " "))
 		}
 	}
 	applyProtocolCache(cmd, pc)
@@ -1319,7 +1327,7 @@ func cmdRecord(args []string) {
 	}
 
 	if len(readSet) == 0 {
-		fmt.Println("[cimemo] record: no read-set derivable")
+		fmt.Println("[brine] record: no read-set derivable")
 		return
 	}
 
@@ -1385,7 +1393,7 @@ func cmdRecord(args []string) {
 		}
 	}
 
-	fmt.Printf("[cimemo] record: built in %s, %d outputs, %d inputs\n",
+	fmt.Printf("[brine] record: built in %s, %d outputs, %d inputs\n",
 		buildTime.Round(time.Millisecond), len(m.Blobs), len(readSet))
 
 	// check for divergence (prior build with same closure)
@@ -1397,11 +1405,11 @@ func cmdRecord(args []string) {
 	// collect + record
 	advisories := collectAdvisories(wd, isGo, readSet, divergence, buildInfoVCS, writesActive)
 	if len(advisories) == 0 {
-		fmt.Println("[cimemo] record: nothing to advise")
+		fmt.Println("[brine] record: nothing to advise")
 	} else {
-		fmt.Printf("[cimemo] record: %d advisory(ies)\n", len(advisories))
+		fmt.Printf("[brine] record: %d advisory(ies)\n", len(advisories))
 	}
 	if err := recordConfig(wd, advisories); err != nil {
-		fmt.Fprintf(os.Stderr, "[cimemo] record: config write: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[brine] record: config write: %v\n", err)
 	}
 }

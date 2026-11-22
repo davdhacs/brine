@@ -49,7 +49,7 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 		rel = filepath.ToSlash(rel)
 
 		// Never snapshot cache/VCS internals.
-		if strings.HasPrefix(rel, ".cimemo") || strings.HasPrefix(rel, ".git/") {
+		if strings.HasPrefix(rel, ".brine") || strings.HasPrefix(rel, ".git/") {
 			return nil
 		}
 		// Dot-FILES (e.g. .DS_Store) are skipped individually; dot-DIRECTORIES
@@ -76,7 +76,7 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 
 		f, err := os.Open(path)
 		if err != nil {
-			if os.Getenv("CIMEMO_DEBUG") != "" {
+			if os.Getenv("BRINE_DEBUG") != "" {
 				fmt.Fprintf(os.Stderr, "[dbg] open failed %s: %v\n", rel, err)
 			}
 			return nil

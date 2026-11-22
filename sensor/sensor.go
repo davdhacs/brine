@@ -119,9 +119,9 @@ func CacheProtocol(dir string) (Reading, error) {
 
 // Coverage discovers test→code mappings for test-selection memoization.
 //
-// Coverage-based test SELECTION is out of scope for cimemo: it
+// Coverage-based test SELECTION is out of scope for brine: it
 // predicts which tests are unaffected and skips them — a behavioral
-// change with a false-confidence risk. cimemo memoizes what ran;
+// change with a false-confidence risk. brine memoizes what ran;
 // it does not choose what to run. Coverage data may still be useful
 // for closure discovery (what code a test reads), but the selection
 // logic is a separate tool.
@@ -132,7 +132,7 @@ func Coverage(dir string) (Reading, error) {
 // GitHistory seeds the learned model from commit co-change statistics.
 //
 // TODO(sensor #11): `git log --name-status` gives years of
-// (changed files, build result) pairs before cimemo has run once.
+// (changed files, build result) pairs before brine has run once.
 // Seed model edges from file co-change clusters to skip the cold-start
 // convergence period. Statistical tier — seeds only; never serves hits
 // without validation.

@@ -1,10 +1,10 @@
-# cimemo
+# brine
 
 Content-addressed memoization for build commands.
 
 ```
-$ cimemo go build -o app ./cmd/app   # cold: builds, stores receipt
-$ cimemo go build -o app ./cmd/app   # CACHE HIT
+$ brine go build -o app ./cmd/app   # cold: builds, stores receipt
+$ brine go build -o app ./cmd/app   # CACHE HIT
 ```
 
 Input closures: `go list -deps` for Go (exact, recomputable); git-tracked
@@ -16,8 +16,8 @@ write semantics during the build; mtime is the fallback for large trees.
 
 Things git can't see — untracked configs, env vars, submodule contents —
 each have their own mechanism (read-set patterns, `key_env` declaration,
-gitlink hashing). `cimemo record <cmd>` discovers a project's hidden
-inputs and writes `.cimemo.json`.
+gitlink hashing). `brine record <cmd>` discovers a project's hidden
+inputs and writes `.brine.json`.
 
 Divergence detector: same inputs, different output → binary dissection
 (ELF/Mach-O/ar section diff) with likely causes named. Every blob is
@@ -33,10 +33,10 @@ working directory, env vars are declared not observed, Bazel/Gradle
 untested, write-tracking caps at 4096 dirs.
 
 ```
-go install github.com/davdhacs/cimemo/cmd/cimemo@latest
-cimemo make
-cimemo make           # hit
-cimemo record make    # discovers hidden inputs, writes config
+go install github.com/davdhacs/brine/cmd/brine@latest
+brine make
+brine make           # hit
+brine record make    # discovers hidden inputs, writes config
 ```
 
 Design notes: [docs/sensors.md](docs/sensors.md) ·

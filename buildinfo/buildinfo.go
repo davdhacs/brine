@@ -1,7 +1,7 @@
 // Package buildinfo inspects go binaries' embedded build metadata
 // (go version -m) and turns it into memoization-safety findings.
 //
-// Why: cimemo keys on file content + command + build config. Two
+// Why: brine keys on file content + command + build config. Two
 // binary inputs are invisible to that key:
 //
 //   - VCS stamping (vcs.revision/time/modified): embedded per commit.
@@ -76,7 +76,7 @@ func Inspect(binPath string) (*Info, error) {
 }
 
 // Audit checks a build's info against the command that produced it.
-// command is the full argv cimemo ran (ldflags in argv are keyed).
+// command is the full argv brine ran (ldflags in argv are keyed).
 func Audit(info *Info, command string) []Finding {
 	if info == nil {
 		return nil
@@ -86,7 +86,7 @@ func Audit(info *Info, command string) []Finding {
 		out = append(out, Finding{
 			Kind:   "vcs-stamp",
 			Detail: info.VCSRevision,
-			Warning: "output embeds VCS stamps; cimemo keys on file content — " +
+			Warning: "output embeds VCS stamps; brine keys on file content — " +
 				"identical trees at different commits (cherry-pick/rebase) would serve the old stamp. " +
 				"Key-folding git HEAD (default) makes this sound; set -buildvcs=false to avoid entirely.",
 		})
@@ -97,7 +97,7 @@ func Audit(info *Info, command string) []Finding {
 			Detail: info.Ldflags,
 			Warning: "binary was linked with -ldflags not present in the memoized command " +
 				"(sourced from GOFLAGS or a wrapper) — verify the values are captured by the key, " +
-				"or pin them in .cimemo.json",
+				"or pin them in .brine.json",
 		})
 	}
 	return out
