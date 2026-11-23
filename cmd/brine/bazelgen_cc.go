@@ -894,6 +894,27 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		binsByDir[binDir] = append(binsByDir[binDir], l)
 	}
 
+	// laVariants: each .la output -> the lib keys of the objects its
+	// producing link consumed (a .la is a bundle of every variant that
+	// fed it — dependents need them all)
+	laVariants := map[string][]string{}
+	for _, l := range links {
+		if !strings.HasSuffix(l.Out, ".la") {
+			continue
+		}
+		var keys []string
+		seen := map[string]bool{}
+		for _, o := range l.Objects {
+			for _, k := range objOwner[o] {
+				if !seen[k] {
+					seen[k] = true
+					keys = append(keys, k)
+				}
+			}
+		}
+		laVariants[l.Out] = keys
+	}
+
 	// one BUILD file per dir: libraries + binaries composed, single write
 	allDirs := map[string]bool{}
 	for dir := range dirLibs {
@@ -959,13 +980,24 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					depList = append(depList, lbl)
 				}
 			}
-			// project library inputs (.la/.a): dep on the owning package —
-			// appended AFTER object deps: the observed link line places
-			// libraries after objects, and --start-lib groups need
-			// consumers first
+			// project library inputs (.la/.a): a .la bundles every variant
+			// its own link consumed (libcurl.la carries lib, curlx, vauth,
+			// vtls objects) — dep all of them, not just the dominant one;
+			// appended AFTER object deps (--start-lib groups need
+			// consumers first)
 			var libRefDeps []string
 			for _, ref := range l.LibRefs {
-				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(relTo(wd, joinCtx(l.CtxDir, ref)))))
+				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+				if producers, ok := laVariants[refPath]; ok {
+					for _, key := range producers {
+						if lib, ok := libs[key]; ok {
+							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
+						}
+					}
+					continue
+				}
+				// .a or unmatched .la: dominant lib of the owning package
+				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
 				}
