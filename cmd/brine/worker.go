@@ -14,6 +14,15 @@
 // restores in milliseconds; cache miss → worker compiles (its gocache
 // also hits the shared store) and the client receives the outputs without
 // ever running the toolchain.
+//
+// Endpoints:
+//
+//	GET  /health    liveness
+//	POST /execute   {"args": [...], "commit": "..."} → build result
+//	POST /restart   re-exec the worker with the same env (self-restart
+//	                without pkill pattern games — a pkill whose pattern
+//	                matches the restarting shell's own cmdline kills the
+//	                restarter instead of the target; found the hard way)
 package main
 
 import (
@@ -24,7 +33,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/davdhacs/brine/gocache"
 )
 
 // executeRequest is the client's build request.
@@ -38,7 +50,7 @@ type executeResponse struct {
 	OK       bool   `json:"ok"`
 	Key      string `json:"key"` // receipt key — the client restores by this
 	WallMs   int64  `json:"wall_ms"`
-	Output   string `json:"output"`   // tail of the build log on failure
+	Output   string `json:"output"`   // build log tail on failure; warnings on success
 	Strategy string `json:"strategy"` // receipt strategy when cached
 }
 
@@ -56,15 +68,61 @@ func cmdWorker(args []string) {
 		}
 	}
 
+	// restart child: wait for the old process to release the port
+	if os.Getenv("BRINE_WORKER_RESTART_SLEEP") != "" {
+		time.Sleep(time.Second)
+	}
+
 	wd, _ := os.Getwd()
 	brineBin, err := os.Executable()
 	if err != nil {
 		fatal("worker: %v", err)
 	}
 
+	// Auth sanity at startup: a worker with broken Azure credentials
+	// executes builds fine but every receipt upload fails silently into
+	// the log — the worst failure mode (found the hard way: an invalid
+	// SPN secret produced a fully "working" worker that never shared).
+	if os.Getenv("BRINE_REMOTE") == "1" {
+		if r := gocache.NewRemoteFromEnv(); r != nil {
+			if err := r.ValidateAuth(); err != nil {
+				fmt.Fprintf(os.Stderr, "[brine] worker: ⚠ Azure auth FAILED — receipts will NOT upload to the shared store: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[brine] worker:   check BRINE_AZURE_TOKEN / AZURE_TENANT_ID+CLIENT_ID+CLIENT_SECRET; builds still execute locally\n")
+			} else {
+				fmt.Printf("[brine] worker: Azure auth OK (shared store reachable)\n")
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "[brine] worker: ⚠ BRINE_REMOTE=1 but no remote configured (BRINE_AZURE_ACCOUNT missing?) — receipts stay local\n")
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/restart", func(w http.ResponseWriter, _ *http.Request) {
+		// Re-exec the worker as a detached child with the same env and
+		// arguments, then exit. The child sleeps to let the port free.
+		w.Write([]byte("restarting\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		cmd := exec.Command(brineBin, "worker", "--port", fmt.Sprint(port))
+		if token != "" {
+			cmd.Args = append(cmd.Args, "--token", token)
+		}
+		cmd.Dir = wd
+		cmd.Env = append(os.Environ(), "BRINE_WORKER_RESTART_SLEEP=1")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach: survives our exit
+		cmd.Stdout, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err == nil {
+			go func() {
+				// reap the child so it does not linger as a zombie
+				cmd.Wait()
+			}()
+		}
+		os.Exit(0)
 	})
 	mux.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {
 		if token != "" && r.Header.Get("Authorization") != "Bearer "+token {
@@ -106,8 +164,13 @@ func cmdWorker(args []string) {
 			}
 			resp.Output = tail
 		} else {
-			// strategy from the log line for observability
+			// Surface the receipt-upload health even on success — a
+			// "working" build whose receipt never reached the shared store
+			// is a failed remote build from the client's perspective.
 			resp.Output = lastLineContaining(string(out), "strategy=")
+			if up := lastLineContaining(string(out), "upload failed"); up != "" {
+				resp.Output = up
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -115,6 +178,7 @@ func cmdWorker(args []string) {
 
 	fmt.Printf("[brine] worker: listening on :%d (repo %s)\n", port, wd)
 	fmt.Printf("[brine]   POST /execute {\"args\": [\"go\",\"build\",...]}\n")
+	fmt.Printf("[brine]   POST /restart (self-restart, same env)\n")
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), mux); err != nil {
 		fatal("worker: %v", err)
 	}

@@ -140,6 +140,45 @@ func (r *Remote) getToken() (string, error) {
 	return r.token, nil
 }
 
+// GetTokenPub returns a storage token, or the auth error. Public wrapper
+// for startup sanity checks (worker): a credential problem should be
+// visible before builds run, not discovered in lost receipts.
+func (r *Remote) GetTokenPub() (string, error) {
+	return r.getToken()
+}
+
+// ValidateAuth verifies credentials against the actual container: fetches
+// a key that never exists — 401/403 means bad credentials, 404 means the
+// token is valid and the container reachable. Static tokens are otherwise
+// returned unchecked (no AAD round-trip), which made an invalid token
+// look "OK" at worker startup (found the hard way).
+func (r *Remote) ValidateAuth() error {
+	token, err := r.getToken()
+	if err != nil {
+		return err
+	}
+	probe := "brine-auth-probe-nonexistent"
+	req, err := http.NewRequest("GET", r.containerURL()+"/"+probe, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("x-ms-version", "2023-11-03")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return nil // token valid, key absent — exactly what we asked for
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("container rejected credentials (HTTP %d)", resp.StatusCode)
+	default:
+		return fmt.Errorf("unexpected probe status HTTP %d", resp.StatusCode)
+	}
+}
+
 // Get returns the blob at key, or nil,nil when absent.
 func (r *Remote) Get(key string) ([]byte, error) {
 	token, err := r.getToken()
