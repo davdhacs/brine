@@ -177,13 +177,16 @@ func (m *Manifest) OutputHashes() map[string]string {
 	return out
 }
 
-// LatestManifestForCommand returns the most recently created manifest
-// for a command, or nil. (ManifestsForCommand returns ReadDir order,
-// which is filename-sorted, not time-sorted.)
+// LatestManifestForCommand returns the best manifest for a command:
+// richest first (most outputs), recency as tiebreak. NOT simply the
+// latest — a no-op rebuild's 0-blob receipt is newer than the real
+// build's and would shadow it forever (empty "hits").
 func (s *Store) LatestManifestForCommand(command string) *Manifest {
 	var best *Manifest
 	for _, m := range s.ManifestsForCommand(command) {
-		if best == nil || m.Created.After(best.Created) {
+		if best == nil ||
+			len(m.Blobs) > len(best.Blobs) ||
+			(len(m.Blobs) == len(best.Blobs) && m.Created.After(best.Created)) {
 			best = m
 		}
 	}

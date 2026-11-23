@@ -214,6 +214,12 @@ func cmdMemoize(args []string, forceFull bool) {
 							count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
 						recordHit(mod, command)
 						return
+					} else {
+						// NEVER silent: a failed restore that falls through
+						// to a rebuild is how 0-blob receipts get stored
+						// over good ones (root-owned output dirs, disk
+						// full, permissions — all rebuild "successfully").
+						fmt.Fprintf(os.Stderr, "[brine] commit receipt restore failed: %v — rebuilding\n", err)
 					}
 				}
 			}
@@ -448,7 +454,15 @@ func cmdMemoize(args []string, forceFull bool) {
 								storeCommitReceiptIfClean(st, m, wd, command, toolchain, args)
 								recordHit(mod, command)
 								return
+							} else {
+								// NEVER silent (same as the commit fast
+								// path): a failed restore that falls
+								// through to a rebuild is how 0-blob
+								// receipts get stored over good ones.
+								fmt.Fprintf(os.Stderr, "[brine] keyed receipt restore failed: %v — rebuilding\n", err)
 							}
+						} else {
+							fmt.Fprintf(os.Stderr, "[brine] keyed receipt %s: input mismatch — rebuilding\n", pk)
 						}
 					}
 				}
@@ -847,6 +861,15 @@ func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyComman
 		cm := *m
 		cm.Key = ck
 		cm.KeyKind = "commit"
+		// Same richer-receipt guard as the content store: a no-op
+		// rebuild's 0-blob manifest must not replace the commit alias
+		// of the real build (found live: the alias overwrite poisoned
+		// every later run into empty hits).
+		if prev, err := st.GetManifest(ck); err == nil && prev != nil && len(prev.Blobs) > len(cm.Blobs) {
+			fmt.Printf("[brine] commit receipt %s: keeping richer alias (%d outputs > %d)\n",
+				ck, len(prev.Blobs), len(cm.Blobs))
+			return
+		}
 		if err := st.PutManifest(&cm); err == nil {
 			fmt.Printf("[brine] commit receipt: %s\n", ck)
 		}
