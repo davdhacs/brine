@@ -65,9 +65,10 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	var compiles []ccCompile
 	var links []ccLink
 	// join backslash continuations first: real Makefiles wrap link lines
-	// across several lines (sqlite wraps its link commands with
-	// trailing backslashes)
-	text := strings.ReplaceAll(string(out), "\\\n", " ")
+	// across several lines, and make appends trailing spaces after the
+	// backslash before the newline (sqlite: "\ <space> <newline>") — a
+	// literal backslash-newline match misses those
+	text := contRe.ReplaceAllString(string(out), " ")
 	for _, line := range strings.Split(text, "\n") {
 		fields := splitCommand(line)
 		if len(fields) < 2 {
@@ -134,6 +135,10 @@ func splitCommand(line string) []string {
 	}
 	return fields
 }
+
+// contRe matches a make line continuation: backslash, optional trailing
+// whitespace, newline.
+var contRe = regexp.MustCompile(`\\\s*\n`)
 
 var ccCompilerRe = regexp.MustCompile(`^(cc|gcc|clang|gcc-[0-9]+|clang-[0-9]+|g\+\+|clang\+\+|c\+\+)$`)
 
