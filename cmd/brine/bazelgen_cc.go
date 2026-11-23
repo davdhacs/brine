@@ -228,7 +228,7 @@ var contRe = regexp.MustCompile(`\\\s*\n`)
 
 // automakeFragmentRe matches automake's VPATH source quoting:
 // `test -f 'x.c' || echo './'`x.c → stripped whole; x.c remains.
-var automakeFragmentRe = regexp.MustCompile("\x60test -f '[^']*' \|\| echo '[^']*'\x60")
+var automakeFragmentRe = regexp.MustCompile("\x60test -f '[^']*' \\|\\| echo '[^']*'\x60")
 
 var ccCompilerRe = regexp.MustCompile(`^(cc|gcc|clang|gcc-[0-9]+|clang-[0-9]+|g\+\+|clang\+\+|c\+\+)$`)
 
