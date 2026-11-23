@@ -205,6 +205,7 @@ func cmdMemoize(args []string, forceFull bool) {
 					verifyRestored(m, wd)
 					if count, bytes, err := st.RestoreManifest(m, wd); err == nil {
 						reportKey(ck)
+						go st.EnsureRemote(m) // hit paths never upload; share local receipts
 						fmt.Printf("[brine] CACHE HIT (commit): %s — clean tree at HEAD implies closure\n", ck)
 						fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 							count, float64(bytes)/1024/1024, time.Since(start).Round(time.Millisecond))
@@ -256,6 +257,7 @@ func cmdMemoize(args []string, forceFull bool) {
 				count, bytes, err := st.RestoreManifest(m, wd)
 				if err == nil {
 					reportKey(m.Key)
+					go st.EnsureRemote(m) // hit paths never upload; share local receipts
 					fmt.Printf("[brine] CACHE HIT: %s\n", m.Key)
 					fmt.Printf("[brine]   %d outputs, %.1f MB, strategy=%s (%s)\n",
 						count, float64(bytes)/1024/1024, m.Strategy,
@@ -331,6 +333,7 @@ func cmdMemoize(args []string, forceFull bool) {
 				}
 				if err == nil {
 					reportKey(k)
+					go st.EnsureRemote(m) // hit paths never upload; share local receipts
 					verifyRestored(m, wd)
 					fmt.Printf("[brine] CACHE HIT (keyed): %s — closure re-derived\n", k)
 					fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",

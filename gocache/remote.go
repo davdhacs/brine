@@ -22,6 +22,11 @@
 package gocache
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
+
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -145,6 +150,85 @@ func (r *Remote) getToken() (string, error) {
 // visible before builds run, not discovered in lost receipts.
 func (r *Remote) GetTokenPub() (string, error) {
 	return r.getToken()
+}
+
+// GetStreamingRaw streams key to dest with sha256 verification and
+// STALL detection instead of a total timeout. A fixed deadline (the 30s
+// client default, or TimeoutTracker's 3-15s range) kills legitimate
+// multi-hundred-MB receipt blobs on modest links — a 148MB prometheus
+// binary timed out at exactly the client cap while the blob sat in the
+// store, and the caller masked it as "not found". Cancels only when no
+// bytes arrive for stallLimit.
+func (r *Remote) GetStreamingRaw(key, expectHash, dest string) error {
+	token, err := r.getToken()
+	if err != nil {
+		return err
+	}
+	// no-total-timeout client sharing the transport pool
+	client := &http.Client{Transport: r.client.Transport}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", r.containerURL()+"/"+key, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("x-ms-version", "2023-11-03")
+
+	const stallLimit = 30 * time.Second
+	timer := time.AfterFunc(stallLimit, cancel) // armed; reset on every read
+	defer timer.Stop()
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("remote GET %s: not found", key)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("remote GET %s: HTTP %d", key, resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmp := dest + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	h := sha256.New()
+	buf := make([]byte, 256<<10)
+	fetchErr := func() error {
+		for {
+			n, rerr := resp.Body.Read(buf)
+			if n > 0 {
+				timer.Reset(stallLimit)
+				h.Write(buf[:n])
+				if _, werr := f.Write(buf[:n]); werr != nil {
+					return werr
+				}
+			}
+			if rerr == io.EOF {
+				return nil
+			}
+			if rerr != nil {
+				return rerr
+			}
+		}
+	}()
+	f.Close()
+	if fetchErr != nil {
+		os.Remove(tmp)
+		return fetchErr
+	}
+	if hex.EncodeToString(h.Sum(nil)) != expectHash {
+		os.Remove(tmp)
+		return fmt.Errorf("integrity: %s content does not hash to key", key)
+	}
+	return os.Rename(tmp, dest)
 }
 
 // ValidateAuth verifies credentials against the actual container: fetches

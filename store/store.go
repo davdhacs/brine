@@ -128,6 +128,10 @@ func (s *Store) GetBlob(hash string) ([]byte, error) {
 	if os.IsNotExist(err) && s.hasRemote() {
 		if ferr := s.remoteFetchBlob(hash); ferr == nil {
 			data, err = os.ReadFile(s.blobPath(hash))
+		} else {
+			// the real failure (timeout, integrity, HTTP) — never mask
+			// a fetch error as absence
+			return nil, ferr
 		}
 	}
 	if os.IsNotExist(err) {

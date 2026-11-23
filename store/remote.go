@@ -1,8 +1,6 @@
 package store
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -65,25 +63,54 @@ func (s *Store) remoteFetchManifest(key string) (*Manifest, error) {
 	return &m, nil
 }
 
+// EnsureRemote pushes a locally-known receipt to the shared store when
+// it is absent there. Hit paths never upload — a receipt built while the
+// remote was down (or its auth broken) stays local forever without this,
+// invisible to other machines. Existence-checked per blob so a hit does
+// not re-transfer 100MB+ bodies that are already shared.
+func (s *Store) EnsureRemote(m *Manifest) error {
+	if !s.hasRemote() || m == nil {
+		return nil
+	}
+	for _, ref := range m.Blobs {
+		if exists, err := s.remote.ExistsPub(remoteBlobPrefix + ref.Hash); err == nil && exists {
+			continue
+		}
+		data, err := s.GetBlob(ref.Hash)
+		if err != nil {
+			continue // blob pruned locally; manifest still references it
+		}
+		if _, err := s.remote.PutIfNotExistPub(remoteBlobPrefix+ref.Hash, data); err != nil {
+			return fmt.Errorf("blob upload %s: %w", ref.Hash[:12], err)
+		}
+	}
+	if exists, err := s.remote.ExistsPub(remoteManifestPrefix + m.Key); err == nil && exists {
+		return nil
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return s.remote.PutPub(remoteManifestPrefix+m.Key, data)
+}
+
 // remoteFetchBlob pulls a blob into the local store, verifying its
-// content hash (the key) before accepting it.
+// content hash (the key) before accepting it. Streams to disk with stall
+// detection — receipt blobs are routinely 100MB+ and a fixed client
+// timeout kills legitimate transfers (masked, before this fix, as "blob
+// not found").
 func (s *Store) remoteFetchBlob(hash string) error {
 	// Check the file directly — calling GetBlob here would recurse
 	// (GetBlob calls remoteFetchBlob on local miss).
 	if _, err := os.Stat(s.blobPath(hash)); err == nil {
 		return nil // already local
 	}
-	data, err := s.remote.Get(remoteBlobPrefix + hash)
-	if err != nil || data == nil {
-		return fmt.Errorf("blob fetch %s: %v", hash[:12], err)
-	}
-	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != hash {
-		return fmt.Errorf("blob INTEGRITY %s: content hash mismatch — rejecting", hash[:12])
-	}
-	p := s.blobPath(hash)
-	if err := writeAtomic(p, data); err != nil {
-		return err
+	// stream to disk with stall detection: receipt blobs are 100MB+
+	// and a fixed client timeout kills legitimate transfers on modest
+	// links (was masked as "blob not found" — the prometheus 148MB
+	// binary timed out at exactly the 30s cap while sitting in the store)
+	if err := s.remote.GetStreamingRaw(remoteBlobPrefix+hash, hash, s.blobPath(hash)); err != nil {
+		return fmt.Errorf("blob fetch %s: %w", hash[:12], err)
 	}
 	s.markBlob(hash)
 	return nil
