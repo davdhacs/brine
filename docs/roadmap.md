@@ -69,10 +69,37 @@ Status legend: [x] done+validated, [~] in progress, [ ] next up.
   selectively (substring or glob match, verify-on-restore);
   `--restore` keeps eager behavior. Collector numbers: eager
   7.5min/1.6GB → report-only ~0s + selective 82MB binary 18.9s.
-- [ ] Collector closure precision — key_files/depfile closure
-  (~200 files, proven 1.6s in the case study) replacing the 20K-file
-  git-tracked fallback that cost 13.6 min. Combined with the two
-  items above: ~30s warm collector remote-build.
+- [x] **Collector closure precision + the real bottleneck hunt** —
+  MEASURED, not theorized: the closure was never the problem (455
+  git-tracked files, 67ms to hash — the "20K files" estimate counted
+  submodule working trees that `git ls-files` doesn't recurse into).
+  The 817s worker time decomposed into a bug cluster found live on
+  tone:
+  1. **0-blob receipt poisoning**: silent restore failures (root-
+     owned output dirs from docker builds — the wrap running as
+     `house` cannot write into root-owned `cmake-build/`) fell
+     through to no-op rebuilds whose 0-blob snapshots OVERWROTE the
+     real receipts (flat PutManifest locally, PutPub remotely) —
+     then the warm path served the empty receipts as "hits" forever.
+     Fixes (8f852ed): restore failures are now LOUD on every hit
+     path (commit fast-path, keyed check, warm path); richer-receipt
+     guards on both the content store and the commit alias; warm
+     path prefers the RICHEST manifest for a command, not the
+     latest.
+  2. **Docker-builder ownership pattern**: builds inside docker
+     write as root; the host-side wrap cannot restore over them.
+     Operational fix: `docker exec <builder> chown -R $(id -u)
+     <mount>` after each real build (no-op rebuilds don't rewrite
+     outputs, so ownership persists). Future work: automate.
+  3. BRINE_DEBUG now prints the exact FromFiles cmd string — the
+     divergence-hunting ground truth (proved key stability: byte-
+     identical cmd strings across runs; the "two keys" were content
+     vs commit-alias keys all along).
+  Final measured numbers (tone worker, collector cmake build):
+  cold rebuild 13.4s (relink + scoped snapshot + 85MB upload),
+  warm dispatch 0.77-0.86s (commit-receipt hit, both binaries
+  restored+verified), remote-build report-only end-to-end 1.1s,
+  selective binary restore to mac 18.9s. Original: 21m9s.
 - [ ] cel-go-style fidelity experiment for a C/C++ project.
 
 ## Real-world C/C++ findings so far (keep for the paper)

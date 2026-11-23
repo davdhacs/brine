@@ -103,3 +103,26 @@ the remote was down no longer stay invisible to other machines.
 - Token auth (`--token` / `BRINE_SERVE_TOKEN`) mirrors serve.
 - The worker reports the receipt key from every wrap exit path: commit
   fast-path hit, content-key hit, keyed hit, and fresh store.
+
+## Dockerized builders: the ownership pattern
+
+Builds inside a container write outputs as root (container user), but
+the host-side wrap runs as the host user — receipt restores into a
+root-owned output tree fail with permission denied. The failure is
+LOUD (every hit path prints restore errors before falling back to a
+rebuild), and the operational fix is a post-build chown:
+
+```sh
+docker exec <builder> chown -R $(id -u) /path/inside/the/mount
+```
+
+Run it after each real build; no-op rebuilds don't rewrite outputs, so
+ownership persists across warm runs. (The container doesn't know host
+usernames — always chown by numeric UID.)
+
+This failure mode matters beyond permissions: a restore that fails
+silently and falls through to a rebuild is how 0-blob receipts get
+stored over good ones (a no-op rebuild snapshots nothing). brine now
+guards both store paths against output-losing overwrites and prefers
+the richest manifest for a command on the warm path — but keeping
+restores working in the first place is the real fix.
