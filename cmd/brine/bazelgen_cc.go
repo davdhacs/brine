@@ -885,6 +885,43 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	model := buildCCModel(compiles, links, wd)
 	dirLibs, libs, objOwner, objCompile := model.dirLibs, model.libs, model.objOwner, model.objCompile
 
+	// header-only packages: directories with no compiles of their own
+	// whose headers are read by other packages (curl's include/ holds
+	// the public API headers — nothing compiles there, but every src
+	// compile reads them). Foreign compiles need them declared in a
+	// package they can dep.
+	hdrOnlyPkgs := map[string][]string{} // dir -> project-relative hdrs
+	for _, ls := range dirLibs {
+		for _, lib := range ls {
+			for _, h := range lib.ExtHdrs {
+				hdir := filepath.ToSlash(filepath.Dir(h))
+				if hdir == "." {
+					hdir = ""
+				}
+				if _, live := dirLibs[hdir]; live {
+					continue
+				}
+				hdrOnlyPkgs[hdir] = append(hdrOnlyPkgs[hdir], h)
+			}
+		}
+	}
+	for hdir, hdrs := range hdrOnlyPkgs {
+		var b strings.Builder
+		b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_library\")\n\n")
+		b.WriteString("cc_library(\n")
+		fmt.Fprintf(&b, "    name = %q,\n", ccLibName(hdir))
+		writeSortedStrings(&b, "hdrs", dedup(hdrs))
+		b.WriteString("    visibility = [\"//visibility:public\"],\n")
+		b.WriteString(")\n")
+		buildDir := hdir
+		if buildDir == "" {
+			buildDir = "."
+		}
+		os.WriteFile(filepath.Join(wd, buildDir, "BUILD.bazel"), []byte(b.String()), 0o644)
+		// register in dirLibs so dep resolution finds it
+		dirLibs[hdir] = append(dirLibs[hdir], &ccLibrary{Dir: hdir, Name: ccLibName(hdir), Hdrs: dedup(hdrs)})
+	}
+
 	// headers referenced by OTHER packages' compiles but read by no
 	// compile of this package (curl: curlx/curlx.h is included only by
 	// src/tool_setup.h — no lib/ depfile ever lists it, so no rule
