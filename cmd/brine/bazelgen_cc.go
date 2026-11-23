@@ -1105,6 +1105,25 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			if lib.AlwaysLink {
 				b.WriteString("    alwayslink = 1,\n")
 			}
+			// filter srcs/hdrs that point into subpackages (own BUILD files)
+			// — cross-package file labels are invalid in Bazel
+			filterSubpkg := func(paths []string) []string {
+				var out []string
+				for _, p := range paths {
+					pdir := filepath.ToSlash(filepath.Dir(p))
+					if pdir == "." || pdir == "" {
+						out = append(out, p) // root-level: always safe
+						continue
+					}
+					if _, isPkg := dirLibs[pdir]; isPkg && pdir != dir {
+						continue // subpackage: belongs to its own rule
+					}
+					out = append(out, p)
+				}
+				return out
+			}
+			lib.Srcs = filterSubpkg(lib.Srcs)
+			lib.Hdrs = filterSubpkg(lib.Hdrs)
 			writeSortedStrings(&b, "srcs", lib.Srcs)
 			if len(lib.Hdrs) > 0 {
 				writeSortedStrings(&b, "hdrs", lib.Hdrs)
