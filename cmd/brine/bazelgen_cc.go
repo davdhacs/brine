@@ -811,6 +811,43 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 	}
 
+	// headers referenced by OTHER packages' compiles but read by no
+	// compile of this package (curl: curlx/curlx.h is included only by
+	// src/tool_setup.h — no lib/ depfile ever lists it, so no rule
+	// declares it and dependents' includes fail). Declare such headers on
+	// the owning package's primary library.
+	extReferenced := map[string]map[string]bool{} // pkg dir -> header set
+	for _, ls := range dirLibs {
+		for _, lib := range ls {
+			for _, h := range lib.ExtHdrs {
+				pdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(h)))
+				if extReferenced[pdir] == nil {
+					extReferenced[pdir] = map[string]bool{}
+				}
+				extReferenced[pdir][h] = true
+			}
+		}
+	}
+	for pdir, hdrs := range extReferenced {
+		ls := dirLibs[pdir]
+		if len(ls) == 0 {
+			continue
+		}
+		var declared []string
+		for _, lib := range ls {
+			declared = append(declared, lib.Hdrs...)
+		}
+		for h := range hdrs {
+			rel := h
+			if pdir != "" {
+				rel = strings.TrimPrefix(h, pdir+"/")
+			}
+			if !contains(declared, rel) {
+				ls[0].Hdrs = append(ls[0].Hdrs, rel) // primary carries it
+			}
+		}
+	}
+
 	// binaries by output dir
 	binsByDir := map[string][]ccLink{}
 	for _, l := range links {
