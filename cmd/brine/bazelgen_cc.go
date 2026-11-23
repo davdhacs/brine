@@ -978,6 +978,30 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					}
 					continue
 				}
+				// unowned object: automake places some objects under paths
+				// that differ from the compile's -o form (src/Makefile
+				// builds curlx objects into ../lib/curlx/ while naming
+				// them curl-timeval.o) — match by basename when unique
+				if strings.HasSuffix(o, ".o") || strings.HasSuffix(o, ".lo") {
+					base := filepath.Base(o)
+					var match string
+					ambiguous := false
+					for k := range objOwner {
+						if filepath.Base(k) == base {
+							if match != "" {
+								ambiguous = true
+								break
+							}
+							match = k
+						}
+					}
+					if !ambiguous && match != "" {
+						if lib, ok := libs[objOwner[match]]; ok {
+							addDep(ccLabel(lib.Dir, lib.Name))
+						}
+						continue
+					}
+				}
 				if strings.HasSuffix(o, ".c") || strings.HasSuffix(o, ".cc") ||
 					strings.HasSuffix(o, ".cpp") || strings.HasSuffix(o, ".cxx") {
 					src := relTo(wd, o)
