@@ -1068,7 +1068,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		// binaries whose outputs live in this dir
 		for _, l := range binsByDir[dir] {
 			var depList, srcList []string
-			var srcDefines []string
+			var srcDefines, srcHdrs []string
 			seen := map[string]bool{}
 			addDep := func(lbl string) {
 				if !seen[lbl] {
@@ -1130,6 +1130,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 			for _, o := range l.Objects {
 				if c, ok := lookupCompile(o); ok {
+					// headers the binary's compiles read (same-package):
+					// the binary needs them declared to compile its srcs
+					for _, h := range c.Headers {
+						hrel := h
+						if dir != "" && strings.HasPrefix(h, dir+"/") {
+							hrel = strings.TrimPrefix(h, dir+"/")
+						}
+						if !contains(srcHdrs, hrel) {
+							srcHdrs = append(srcHdrs, hrel)
+						}
+					}
 					src := c.Src // already project-relative (relativized at classify)
 					sdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(src)))
 					if sdir != dir {
@@ -1195,6 +1206,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 			if len(srcList) > 0 && len(srcDefines) > 0 {
 				writeSortedStrings(&b, "defines", srcDefines)
+			}
+			if len(srcList) > 0 && len(srcHdrs) > 0 {
+				writeSortedStrings(&b, "hdrs", srcHdrs)
 			}
 			if len(depList) > 0 {
 				writeOrderedStrings(&b, "deps", depList)
