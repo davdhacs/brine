@@ -37,7 +37,8 @@ import (
 
 // ccCompile is one observed compilation.
 type ccCompile struct {
-	Cmd     []string // full argv
+	Cmd     []string // full argv (original relative paths, run in CtxDir)
+	CtxDir  string   // absolute make-recursion context (Entering directory)
 	Src     string   // the .c/.cc file (project-relative)
 	Obj     string   // the -o target (project-relative)
 	Headers []string // project-relative headers from the depfile
@@ -54,6 +55,7 @@ type ccLink struct {
 	LinkOpts   []string            // -l/-L flags: system libraries the link needs
 	IncDirs    []string            // -I flags observed on the link line
 	SrcHeaders map[string][]string // per-source headers (depfile-captured)
+	CtxDir     string              // absolute make-recursion context
 	IsAr       bool
 }
 
@@ -78,7 +80,19 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	// re-execution. Strip the idiom at line level; the bare filename
 	// after the closing backtick remains.
 	text = automakeFragmentRe.ReplaceAllString(text, "")
+	// GNU make recursion markers: commands from subdirectory makes carry
+	// paths relative to THEIR directory (curl: "altsvc.c" means lib/).
+	ctxStack := []string{wd}
 	for _, line := range strings.Split(text, "\n") {
+		if m := makeDirRe.FindStringSubmatch(line); m != nil {
+			if m[1] == "Entering" {
+				ctxStack = append(ctxStack, m[2])
+			} else if len(ctxStack) > 1 {
+				ctxStack = ctxStack[:len(ctxStack)-1]
+			}
+			continue
+		}
+		ctxDir := ctxStack[len(ctxStack)-1]
 		for _, cmd := range splitCompound(line) {
 			fields := splitCommand(cmd)
 			// libtool wrappers: /bin/sh ../libtool --silent --tag=CC
@@ -91,10 +105,11 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 				continue
 			}
 			if c := classifyCompile(fields); c != nil {
+				c.CtxDir = ctxDir
 				relativizeCC(c, wd)
 				compiles = append(compiles, *c)
 			} else if l := classifyLink(fields); l != nil {
-				relativizeCCLink(l, wd)
+				relativizeCCLink(l, wd, ctxDir)
 				links = append(links, *l)
 			}
 		}
@@ -163,15 +178,25 @@ func unwrapLibtool(fields []string) []string {
 // /home/.../sqlite3.c -o sqlite3.o"). Paths outside the project are left
 // absolute and will not group into libraries.
 func relativizeCC(c *ccCompile, wd string) {
-	c.Src = relTo(wd, c.Src)
-	c.Obj = relTo(wd, c.Obj)
+	c.Src = relTo(wd, joinCtx(c.CtxDir, c.Src))
+	c.Obj = relTo(wd, joinCtx(c.CtxDir, c.Obj))
 }
 
-func relativizeCCLink(l *ccLink, wd string) {
-	l.Out = relTo(wd, l.Out)
+func relativizeCCLink(l *ccLink, wd, ctxDir string) {
+	l.CtxDir = ctxDir
+	l.Out = relTo(wd, joinCtx(ctxDir, l.Out))
 	for i, o := range l.Objects {
-		l.Objects[i] = relTo(wd, o)
+		l.Objects[i] = relTo(wd, joinCtx(ctxDir, o))
 	}
+}
+
+// joinCtx resolves a possibly-relative path against the make context
+// directory (subdir makes emit paths relative to themselves).
+func joinCtx(ctxDir, p string) string {
+	if ctxDir == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(ctxDir, p)
 }
 
 func relTo(wd, p string) string {
@@ -225,6 +250,10 @@ func splitCommand(line string) []string {
 // contRe matches a make line continuation: backslash, optional trailing
 // whitespace, newline.
 var contRe = regexp.MustCompile(`\\\s*\n`)
+
+// makeDirRe matches GNU make recursion markers:
+// make[1]: Entering directory '/path/to/lib'
+var makeDirRe = regexp.MustCompile(`^make\[\d+\]: (Entering|Leaving) directory '(.+)'`)
 
 // automakeFragmentRe matches automake's VPATH source quoting:
 // `test -f 'x.c' || echo './'`x.c → stripped whole; x.c remains.
@@ -339,7 +368,10 @@ func captureDepfiles(compiles []ccCompile, wd string) error {
 		args := stripCCFlags(append([]string{}, c.Cmd...), "-o", "-MD", "-MMD", "-MF", "-MT", "-MQ", "-no-canonical-prefixes")
 		args = append(args, "-MD", "-MF", depFile, "-o", throwObj)
 		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = wd
+		cmd.Dir = c.CtxDir
+		if cmd.Dir == "" {
+			cmd.Dir = wd
+		}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("depfile capture for %s: %v\nargv: %s\n%s", c.Src, err, strings.Join(args, " "), out)
 		}
@@ -407,7 +439,7 @@ func captureLinkSourceDepfiles(links []ccLink, wd string) error {
 			src := relTo(wd, o)
 			depFile := filepath.Join(tmpDir, fmt.Sprintf("link%d-%d.d", li, si))
 			throwObj := filepath.Join(tmpDir, fmt.Sprintf("linkthrow%d-%d.o", li, si))
-			args := []string{l.Cmd[0], "-c", o}
+			args := []string{l.Cmd[0], "-c", joinCtx(l.CtxDir, o)}
 			for _, d := range l.Defines {
 				args = append(args, "-D"+d)
 			}
@@ -416,7 +448,10 @@ func captureLinkSourceDepfiles(links []ccLink, wd string) error {
 			}
 			args = append(args, "-MD", "-MF", depFile, "-o", throwObj)
 			cmd := exec.Command(args[0], args[1:]...)
-			cmd.Dir = wd
+			cmd.Dir = l.CtxDir
+			if cmd.Dir == "" {
+				cmd.Dir = wd
+			}
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("link-source depfile capture for %s: %v\nargv: %s\n%s", src, err, strings.Join(args, " "), out)
 			}
