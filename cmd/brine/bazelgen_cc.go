@@ -72,6 +72,12 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	// backslash before the newline (sqlite: "\ <space> <newline>") — a
 	// literal backslash-newline match misses those
 	text := contRe.ReplaceAllString(string(out), " ")
+	// automake VPATH quoting wraps every source in a shell fragment:
+	// `test -f 'altsvc.c' || echo './'`altsvc.c — the fragment contains
+	// spaces, so field splitting shatters it into argv debris that breaks
+	// re-execution. Strip the idiom at line level; the bare filename
+	// after the closing backtick remains.
+	text = automakeFragmentRe.ReplaceAllString(text, "")
 	for _, line := range strings.Split(text, "\n") {
 		for _, cmd := range splitCompound(line) {
 			fields := splitCommand(cmd)
@@ -219,6 +225,10 @@ func splitCommand(line string) []string {
 // contRe matches a make line continuation: backslash, optional trailing
 // whitespace, newline.
 var contRe = regexp.MustCompile(`\\\s*\n`)
+
+// automakeFragmentRe matches automake's VPATH source quoting:
+// `test -f 'x.c' || echo './'`x.c → stripped whole; x.c remains.
+var automakeFragmentRe = regexp.MustCompile("\x60test -f '[^']*' \|\| echo '[^']*'\x60")
 
 var ccCompilerRe = regexp.MustCompile(`^(cc|gcc|clang|gcc-[0-9]+|clang-[0-9]+|g\+\+|clang\+\+|c\+\+)$`)
 
