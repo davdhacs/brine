@@ -648,8 +648,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// binaries by output dir
 	binsByDir := map[string][]ccLink{}
 	for _, l := range links {
-		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") {
-			continue // archives and shared libs are grouping hints; cc_library covers compilation
+		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") || strings.HasSuffix(l.Out, ".la") {
+			continue // archives, shared libs, and libtool .la libraries are
+			// grouping hints; cc_library covers compilation
 		}
 		binDir := filepath.ToSlash(filepath.Dir(l.Out))
 		if binDir == "." {
@@ -929,8 +930,8 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// binary deps from links
 	binDeps := map[string][]string{} // binary name -> required lib labels
 	for _, l := range links {
-		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") {
-			continue // same skip as generation: shared libs are covered by cc_library
+		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") || strings.HasSuffix(l.Out, ".la") {
+			continue // same skip as generation: libraries are covered by cc_library
 		}
 		var deps []string
 		for _, o := range l.Objects {
