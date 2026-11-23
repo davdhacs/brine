@@ -833,18 +833,33 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		if len(ls) == 0 {
 			continue
 		}
-		var declared []string
-		for _, lib := range ls {
-			declared = append(declared, lib.Hdrs...)
-		}
 		for h := range hdrs {
 			rel := h
 			if pdir != "" {
 				rel = strings.TrimPrefix(h, pdir+"/")
 			}
-			if !contains(declared, rel) {
-				ls[0].Hdrs = append(ls[0].Hdrs, rel) // primary carries it
+			for _, lib := range ls {
+				if !contains(lib.Hdrs, rel) {
+					lib.Hdrs = append(lib.Hdrs, rel)
+				}
 			}
+		}
+	}
+	// within a package, every flag-variant lib declares the union of the
+	// package's headers: a variant's compile may read a header another
+	// variant declared (sandbox inputs are per-rule), and dependents
+	// resolving through the primary need every header present on it
+	for _, ls := range dirLibs {
+		if len(ls) < 2 {
+			continue
+		}
+		var union []string
+		for _, lib := range ls {
+			union = append(union, lib.Hdrs...)
+		}
+		union = dedup(union)
+		for _, lib := range ls {
+			lib.Hdrs = union
 		}
 	}
 
