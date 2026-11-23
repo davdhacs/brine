@@ -678,6 +678,16 @@ func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string][]stri
 	}
 }
 
+// linkCtxResolves reports whether the link's context resolves any objects.
+func linkCtxResolves(objCompile map[string]ccCompile, l ccLink) bool {
+	for _, o := range l.Objects {
+		if _, ok := objCompile[relTo("", joinCtx(l.CtxDir, o))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // resolvePkgDir walks a header's directory up to the nearest LIVE
 // package dir — merged-away subdirs (lib/curlx merged into lib) must
 // resolve to the package that now owns their headers.
@@ -1050,8 +1060,52 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// semantics under --start-lib (bidirectional refs, duplicate
 			// symbols across flag variants), but one dominant .la variant
 			// resolves everything internally (intra-group iteration).
+			// resolve the link's true context: make -n interleaves
+			// sub-make Entering markers (a make[5] 'build' marker precedes
+			// the curl link even though it runs from src/ — its ../libtool
+			// proves it). The context that resolves the most bare object
+			// names against known compiles is the true one.
+			if l.CtxDir == "" || !linkCtxResolves(objCompile, l) {
+				best, bestHits := l.CtxDir, -1
+				for cand := range dirLibs {
+					if cand == "" {
+						continue
+					}
+					hits := 0
+					for _, o := range l.Objects {
+						key := relTo(wd, joinCtx(cand, o))
+						if _, ok := objCompile[key]; ok {
+							hits++
+						}
+					}
+					if hits > bestHits {
+						best, bestHits = filepath.Join(wd, cand), hits
+					}
+				}
+				// also try the recorded ctx
+				hits := 0
+				for _, o := range l.Objects {
+					key := relTo(wd, joinCtx(l.CtxDir, o))
+					if _, ok := objCompile[key]; ok {
+						hits++
+					}
+				}
+				if bestHits > hits {
+					l.CtxDir = best
+				}
+			}
+			lookupCompile := func(o string) (ccCompile, bool) {
+				// objects may be bare names mis-relativized against the
+				// wrong context (marker stack lies) or already
+				// project-relative — try both forms
+				if c, ok := objCompile[relTo(wd, joinCtx(l.CtxDir, o))]; ok {
+					return c, true
+				}
+				c, ok := objCompile[o]
+				return c, ok
+			}
 			for _, o := range l.Objects {
-				if c, ok := objCompile[o]; ok {
+				if c, ok := lookupCompile(o); ok {
 					src := c.Src // already project-relative (relativized at classify)
 					sdir := filepath.ToSlash(filepath.Dir(src))
 					if sdir == "." {
