@@ -669,6 +669,25 @@ func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string]string
 	}
 }
 
+// resolvePkgDir walks a header's directory up to the nearest LIVE
+// package dir — merged-away subdirs (lib/curlx merged into lib) must
+// resolve to the package that now owns their headers.
+func resolvePkgDir(dirLibs map[string][]*ccLibrary, dir string) string {
+	if dir == "." {
+		dir = ""
+	}
+	for {
+		if _, ok := dirLibs[dir]; ok {
+			return dir
+		}
+		i := strings.LastIndexByte(dir, '/')
+		if i < 0 {
+			return dir // root or unmatched: caller reports the finding
+		}
+		dir = dir[:i]
+	}
+}
+
 // isAncestor reports whether dir a is an ancestor (prefix) of dir b.
 func isAncestor(a, b string) bool {
 	if a == "" {
@@ -838,10 +857,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 			deps := map[string]bool{}
 			for _, h := range lib.ExtHdrs {
-				hdir := filepath.ToSlash(filepath.Dir(h))
-				if hdir == "." {
-					hdir = ""
-				}
+				hdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(h)))
 				if primary := primaryLibForDir(dirLibs, hdir); primary != nil && hdir != dir {
 					deps[ccLabel(hdir, primary.Name)] = true
 				} else {
@@ -1061,10 +1077,23 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				if !contains(m.hdrs, filepath.Base(h)) {
 					m.hdrs = append(m.hdrs, filepath.Base(h))
 				}
-			} else if _, known := model[hdir]; known {
-				lbl := ccLabel(hdir, ccLibName(hdir))
-				if !contains(m.deps, lbl) {
-					m.deps = append(m.deps, lbl)
+			} else {
+				pdir := hdir
+				for {
+					if _, known := model[pdir]; known || pdir == "" {
+						break
+					}
+					i := strings.LastIndexByte(pdir, '/')
+					if i < 0 {
+						break
+					}
+					pdir = pdir[:i]
+				}
+				if _, known := model[pdir]; known {
+					lbl := ccLabel(pdir, ccLibName(pdir))
+					if !contains(m.deps, lbl) {
+						m.deps = append(m.deps, lbl)
+					}
 				}
 			}
 		}
