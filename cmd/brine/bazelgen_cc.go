@@ -1110,15 +1110,33 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			filterSubpkg := func(paths []string) []string {
 				var out []string
 				for _, p := range paths {
+					// check every ancestor of the file path: if ANY
+					// ancestor between this rule's dir and the file's dir
+					// is a package, the file belongs to that subpackage
+					// (collector/lib/system-inspector/*.h belongs to the
+					// collector/lib package, not to collector)
+					sub := false
 					pdir := filepath.ToSlash(filepath.Dir(p))
-					if pdir == "." || pdir == "" {
-						out = append(out, p) // root-level: always safe
-						continue
+					for _, seg := range strings.Split(pdir, "/") {
+						if seg == "" || seg == "." {
+							continue
+						}
+						// build the ancestor path progressively from the
+						// rule's dir
+						ancestor := dir
+						if ancestor == "" {
+							ancestor = seg
+						} else {
+							ancestor = ancestor + "/" + seg
+						}
+						if _, isPkg := dirLibs[ancestor]; isPkg && ancestor != dir {
+							sub = true
+							break
+						}
 					}
-					if _, isPkg := dirLibs[pdir]; isPkg && pdir != dir {
-						continue // subpackage: belongs to its own rule
+					if !sub {
+						out = append(out, p)
 					}
-					out = append(out, p)
 				}
 				return out
 			}
