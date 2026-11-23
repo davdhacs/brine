@@ -1256,11 +1256,22 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				}
 				// .lo/.o without a compile: covered by the .la dep below
 			}
-			// project library inputs (.la/.a): dominant variant of the
-			// owning package — one group whose intra-group archive
-			// iteration resolves the package's internal cross-references
+			// project library inputs (.la/.a): every variant the .la's
+			// producing link consumed, dominant first — the dominant's
+			// references (url.c → vtls) pull later variant groups; the
+			// variants' back-refs resolve against the already-pulled
+			// dominant members. local_defines keeps their flag sets from
+			// leaking into the binary's own srcs.
 			for _, ref := range l.LibRefs {
 				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+				if producers, ok := laVariants[refPath]; ok && len(producers) > 0 {
+					for _, key := range producers {
+						if lib, ok := libs[key]; ok {
+							addDep(ccLabel(lib.Dir, lib.Name))
+						}
+					}
+					continue
+				}
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					addDep(ccLabel(rdir, primary.Name))
