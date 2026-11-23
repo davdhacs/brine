@@ -988,6 +988,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 	}
 
+	// dominant variants of multi-variant packages alwayslink: gold does
+	// not re-iterate --start-lib groups (intra-group archive semantics do
+	// not hold), so the dominant's full member set links unconditionally;
+	// other variants never pull (dominant covers their symbols) — no
+	// duplicates
+	for _, ls := range dirLibs {
+		if len(ls) > 1 {
+			ls[0].AlwaysLink = true // dominant (sorted first)
+		}
+	}
+
 	// within a package, every flag-variant lib declares the union of the
 	// package's headers: a variant's compile may read a header another
 	// variant declared (sandbox inputs are per-rule), and dependents
