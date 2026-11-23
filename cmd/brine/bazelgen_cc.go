@@ -1008,20 +1008,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			linkLibSrcs := map[string][]string{} // dir -> srcs for the link lib
 			for _, o := range l.Objects {
 				if keys, ok := objOwner[o]; ok && len(keys) > 0 {
-					// an observed .o: dep on the library that compiles it;
-					// multi-owner objects (flag variants sharing the path)
-					// dep the dominant build — the variant with the most
-					// sources is the real build, the others are test or
-					// specialty targets (curl's unittest tool_main has no
-					// main(); the tool build's does)
-					best := keys[0]
-					for _, k := range keys[1:] {
-						if len(libs[k].Srcs) > len(libs[best].Srcs) {
-							best = k
+					// an observed .o: dep EVERY variant that compiles the
+					// path — multi-owner paths (automake reuses object
+					// names across flag targets; curl's unittest
+					// tool_main.o lacks main(), the tool build's has it)
+					// cannot be disambiguated by dominance alone, and
+					// --start-lib groups make extra variants safe: members
+					// pull only when they resolve an undefined symbol
+					for _, k := range keys {
+						if lib, ok := libs[k]; ok {
+							addDep(ccLabel(lib.Dir, lib.Name))
 						}
-					}
-					if lib, ok := libs[best]; ok {
-						addDep(ccLabel(lib.Dir, lib.Name))
 					}
 					continue
 				}
