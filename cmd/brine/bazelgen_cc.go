@@ -250,7 +250,7 @@ func classifyLink(f []string) *ccLink {
 		for i := 1; i < len(f); i++ {
 			if strings.HasSuffix(f[i], ".a") && out == "" {
 				out = f[i]
-			} else if strings.HasSuffix(f[i], ".o") {
+			} else if strings.HasSuffix(f[i], ".o") || strings.HasSuffix(f[i], ".lo") {
 				objs = append(objs, f[i])
 			}
 		}
@@ -273,8 +273,8 @@ func classifyLink(f []string) *ccLink {
 			}
 			continue
 		}
-		if strings.HasSuffix(f[i], ".o") {
-			objs = append(objs, f[i])
+		if strings.HasSuffix(f[i], ".o") || strings.HasSuffix(f[i], ".lo") {
+			objs = append(objs, f[i]) // .lo: libtool object naming (curl)
 		} else if strings.HasSuffix(f[i], ".c") || strings.HasSuffix(f[i], ".cc") ||
 			strings.HasSuffix(f[i], ".cpp") || strings.HasSuffix(f[i], ".cxx") {
 			// combined compile+link (sqlite's shell: "cc -o sqlite3
