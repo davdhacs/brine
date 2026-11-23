@@ -47,12 +47,14 @@ type ccCompile struct {
 
 // ccLink is one observed link or archive step.
 type ccLink struct {
-	Cmd      []string
-	Out      string   // binary or archive
-	Objects  []string // .o files consumed, or .c/.cc sources (combined compile+link)
-	Defines  []string // observed on combined compile+link commands
-	LinkOpts []string // -l/-L flags: system libraries the link needs
-	IsAr     bool
+	Cmd        []string
+	Out        string              // binary or archive
+	Objects    []string            // .o files consumed, or .c/.cc sources (combined compile+link)
+	Defines    []string            // observed on combined compile+link commands
+	LinkOpts   []string            // -l/-L flags: system libraries the link needs
+	IncDirs    []string            // -I flags observed on the link line
+	SrcHeaders map[string][]string // per-source headers (depfile-captured)
+	IsAr       bool
 }
 
 // ccDiscovery parses a dry-run build into compile and link commands.
@@ -198,7 +200,7 @@ func classifyLink(f []string) *ccLink {
 	}
 	var out string
 	var objs []string
-	var defines, linkOpts []string
+	var defines, linkOpts, incDirs []string
 	for i := 1; i < len(f); i++ {
 		if f[i] == "-o" && i+1 < len(f) {
 			if i+2 <= len(f) {
@@ -219,12 +221,14 @@ func classifyLink(f []string) *ccLink {
 			defines = append(defines, strings.TrimPrefix(f[i], "-D"))
 		} else if strings.HasPrefix(f[i], "-l") || strings.HasPrefix(f[i], "-L") {
 			linkOpts = append(linkOpts, f[i])
+		} else if strings.HasPrefix(f[i], "-I") {
+			incDirs = append(incDirs, strings.TrimPrefix(f[i], "-I"))
 		}
 	}
 	if out == "" || len(objs) == 0 || strings.HasSuffix(out, ".o") {
 		return nil // a compile, not a link
 	}
-	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines, LinkOpts: linkOpts}
+	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines, LinkOpts: linkOpts, IncDirs: incDirs, SrcHeaders: map[string][]string{}}
 }
 
 // captureDepfiles re-runs each compile with -MD -MF to a temp depfile
