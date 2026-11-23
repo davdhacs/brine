@@ -119,7 +119,7 @@ func splitCommand(line string) []string {
 		switch {
 		case r == '"':
 			inQuote = !inQuote
-		case r == ' ' && !inQuote:
+		case (r == ' ' || r == '\t') && !inQuote:
 			if cur.Len() > 0 {
 				fields = append(fields, cur.String())
 				cur.Reset()
@@ -219,12 +219,12 @@ func captureDepfiles(compiles []ccCompile, wd string) error {
 		c := &compiles[i]
 		depFile := filepath.Join(tmpDir, fmt.Sprintf("dep%d.d", i))
 		throwObj := filepath.Join(tmpDir, fmt.Sprintf("throw%d.o", i))
-		args := append([]string{}, c.Cmd...)
+		args := stripCCFlags(append([]string{}, c.Cmd...), "-o", "-MD", "-MMD", "-MF", "-MT", "-MQ", "-no-canonical-prefixes")
 		args = append(args, "-MD", "-MF", depFile, "-o", throwObj)
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = wd
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("depfile capture for %s: %v\n%s", c.Src, err, out)
+			return fmt.Errorf("depfile capture for %s: %v\nargv: %s\n%s", c.Src, err, strings.Join(args, " "), out)
 		}
 		c.Headers = depfiles.Parse(depFile, wd)
 		// drop the source itself from headers (Parse excludes the target
@@ -239,6 +239,31 @@ func captureDepfiles(compiles []ccCompile, wd string) error {
 		c.Headers = filtered
 	}
 	return nil
+}
+
+// stripCCFlags removes flag (and its argument, for two-token flags)
+// occurrences from a compiler argv — depfile capture appends its own
+// -MD/-MF/-o and duplicate flags have divergent semantics between
+// compilers (macOS clang tolerates double -o, Linux gcc does not —
+// found via sqlite on a Linux worker).
+func stripCCFlags(args []string, flags ...string) []string {
+	flagSet := map[string]bool{}
+	for _, f := range flags {
+		flagSet[f] = true
+	}
+	// flags that consume the following token as their argument
+	twoToken := map[string]bool{"-o": true, "-MF": true, "-MT": true, "-MQ": true}
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if flagSet[args[i]] {
+			if twoToken[args[i]] && i+1 < len(args) {
+				i++ // skip the argument too
+			}
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // ccLibrary is a generated cc_library: one per source directory.
