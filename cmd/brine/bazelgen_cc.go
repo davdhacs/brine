@@ -587,6 +587,8 @@ func isSystemInclude(inc string) bool {
 // the dir's cc_library rules (one per flag signature) followed by the
 // cc_binary rules whose outputs live there.
 func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
+	debug := os.Getenv("BRINE_CC_DEBUG") == "1"
+
 	var findings []finding
 
 	// group compiles by (dir, flag signature): the same source compiled
@@ -608,6 +610,10 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 		if !contains(lib.Srcs, filepath.Base(c.Src)) {
 			lib.Srcs = append(lib.Srcs, filepath.Base(c.Src))
+		}
+		if debug {
+			fmt.Fprintf(os.Stderr, "[cc-debug] %s -> %s | hdrs=%d sig=%s\n",
+				c.Src, key, len(c.Headers), flagSignature(c))
 		}
 		objOwner[c.Obj] = key
 		for _, h := range c.Headers {
