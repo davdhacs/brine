@@ -1002,16 +1002,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// consumers first)
 			var libRefDeps []string
 			for _, ref := range l.LibRefs {
+				// a .la/.a deps the DOMINANT variant of the owning package.
+				// The dominant build carries the package's full object set
+				// (merge unites same-signature variants; dominant = most
+				// sources = the real build — for curl's libcurl.la this
+				// is the 128-object variant with lib+vauth+vtls+curlx).
+				// Multi-variant dep lists pollute --start-lib group
+				// ordering: gold does not re-iterate groups, so a
+				// reference from a later group to an earlier group's
+				// member never pulls it (Curl_sha512_256it, found via
+				// manual @params link).
 				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
-				if producers, ok := laVariants[refPath]; ok {
-					for _, key := range producers {
-						if lib, ok := libs[key]; ok {
-							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
-						}
-					}
-					continue
-				}
-				// .a or unmatched .la: dominant lib of the owning package
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
