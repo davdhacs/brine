@@ -63,19 +63,51 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	}
 	var compiles []ccCompile
 	var links []ccLink
-	for _, line := range strings.Split(string(out), "\n") {
+	// join backslash continuations first: real Makefiles wrap link lines
+	// across several lines (sqlite: "cc -o sqlite3 \
+  shell.o ...")
+	text := strings.ReplaceAll(string(out), "\\\n", " ")
+	for _, line := range strings.Split(text, "\n") {
 		fields := splitCommand(line)
 		if len(fields) < 2 {
 			continue
 		}
-		// resolve $ variables make left in (rare with -n; make usually expands)
 		if c := classifyCompile(fields); c != nil {
+			relativizeCC(c, wd)
 			compiles = append(compiles, *c)
 		} else if l := classifyLink(fields); l != nil {
+			relativizeCCLink(l, wd)
 			links = append(links, *l)
 		}
 	}
 	return compiles, links, nil
+}
+
+// relativizeCC converts absolute source/object paths to project-relative
+// (autosetup/cmake builds emit absolute paths — sqlite: "cc -c
+// /home/.../sqlite3.c -o sqlite3.o"). Paths outside the project are left
+// absolute and will not group into libraries.
+func relativizeCC(c *ccCompile, wd string) {
+	c.Src = relTo(wd, c.Src)
+	c.Obj = relTo(wd, c.Obj)
+}
+
+func relativizeCCLink(l *ccLink, wd string) {
+	l.Out = relTo(wd, l.Out)
+	for i, o := range l.Objects {
+		l.Objects[i] = relTo(wd, o)
+	}
+}
+
+func relTo(wd, p string) string {
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	rel, err := filepath.Rel(wd, p)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return p // outside the project: leave as-is
+	}
+	return filepath.ToSlash(rel)
 }
 
 // splitCommand splits a command line, honoring double quotes.
