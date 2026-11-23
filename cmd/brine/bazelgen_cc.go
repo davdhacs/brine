@@ -1131,10 +1131,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			for _, o := range l.Objects {
 				if c, ok := lookupCompile(o); ok {
 					src := c.Src // already project-relative (relativized at classify)
-					sdir := filepath.ToSlash(filepath.Dir(src))
-					if sdir == "." {
-						sdir = ""
-					}
+					sdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(src)))
 					if sdir != dir {
 						if _, isPkg := dirLibs[sdir]; isPkg {
 							// cross-package source: dep the variant that
