@@ -987,16 +987,13 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// consumers first)
 			var libRefDeps []string
 			for _, ref := range l.LibRefs {
+				// a .la/.a ref deps the DOMINANT variant of the owning
+				// package: the dominant build carries the package's full
+				// object set (merge guarantees same-sig variants united),
+				// and extra variants only pollute --start-lib group
+				// ordering (duplicate symbols across variants, found via
+				// manual no-group link on a Linux worker)
 				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
-				if producers, ok := laVariants[refPath]; ok {
-					for _, key := range producers {
-						if lib, ok := libs[key]; ok {
-							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
-						}
-					}
-					continue
-				}
-				// .a or unmatched .la: dominant lib of the owning package
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
