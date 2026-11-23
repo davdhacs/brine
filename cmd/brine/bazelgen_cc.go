@@ -47,11 +47,12 @@ type ccCompile struct {
 
 // ccLink is one observed link or archive step.
 type ccLink struct {
-	Cmd     []string
-	Out     string   // binary or archive
-	Objects []string // .o files consumed, or .c/.cc sources (combined compile+link)
-	Defines []string // observed on combined compile+link commands
-	IsAr    bool
+	Cmd      []string
+	Out      string   // binary or archive
+	Objects  []string // .o files consumed, or .c/.cc sources (combined compile+link)
+	Defines  []string // observed on combined compile+link commands
+	LinkOpts []string // -l/-L flags: system libraries the link needs
+	IsAr     bool
 }
 
 // ccDiscovery parses a dry-run build into compile and link commands.
@@ -197,7 +198,7 @@ func classifyLink(f []string) *ccLink {
 	}
 	var out string
 	var objs []string
-	var defines []string
+	var defines, linkOpts []string
 	for i := 1; i < len(f); i++ {
 		if f[i] == "-o" && i+1 < len(f) {
 			if i+2 <= len(f) {
@@ -216,12 +217,14 @@ func classifyLink(f []string) *ccLink {
 			objs = append(objs, f[i])
 		} else if strings.HasPrefix(f[i], "-D") {
 			defines = append(defines, strings.TrimPrefix(f[i], "-D"))
+		} else if strings.HasPrefix(f[i], "-l") || strings.HasPrefix(f[i], "-L") {
+			linkOpts = append(linkOpts, f[i])
 		}
 	}
 	if out == "" || len(objs) == 0 || strings.HasSuffix(out, ".o") {
 		return nil // a compile, not a link
 	}
-	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines}
+	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines, LinkOpts: linkOpts}
 }
 
 // captureDepfiles re-runs each compile with -MD -MF to a temp depfile
@@ -539,6 +542,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// needs the observed defines to compile them the same way
 			if len(srcList) > 0 && len(l.Defines) > 0 {
 				writeSortedStrings(&b, "defines", l.Defines)
+			}
+			// system libraries the observed link used (-lreadline -lz ...):
+			// without them the link fails on undefined references
+			if len(l.LinkOpts) > 0 {
+				writeSortedStrings(&b, "linkopts", l.LinkOpts)
 			}
 			b.WriteString(")\n\n")
 		}
