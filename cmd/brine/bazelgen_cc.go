@@ -73,19 +73,83 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	// literal backslash-newline match misses those
 	text := contRe.ReplaceAllString(string(out), " ")
 	for _, line := range strings.Split(text, "\n") {
-		fields := splitCommand(line)
-		if len(fields) < 2 {
-			continue
-		}
-		if c := classifyCompile(fields); c != nil {
-			relativizeCC(c, wd)
-			compiles = append(compiles, *c)
-		} else if l := classifyLink(fields); l != nil {
-			relativizeCCLink(l, wd)
-			links = append(links, *l)
+		for _, cmd := range splitCompound(line) {
+			fields := splitCommand(cmd)
+			// libtool wrappers: /bin/sh ../libtool --silent --tag=CC
+			// --mode=compile gcc ... — unwrap to the embedded command
+			// (curl and every autotools+libtool project)
+			if unwrapped := unwrapLibtool(fields); unwrapped != nil {
+				fields = unwrapped
+			}
+			if len(fields) < 2 {
+				continue
+			}
+			if c := classifyCompile(fields); c != nil {
+				relativizeCC(c, wd)
+				compiles = append(compiles, *c)
+			} else if l := classifyLink(fields); l != nil {
+				relativizeCCLink(l, wd)
+				links = append(links, *l)
+			}
 		}
 	}
 	return compiles, links, nil
+}
+
+// splitCompound splits a make -n line on semicolons, dropping the
+// pretty-print echo labels (make recipes read: echo "  CC  " foo.lo;
+// /bin/sh libtool ...). Quote-aware: labels contain spaces.
+func splitCompound(line string) []string {
+	var segs []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range line {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			cur.WriteRune(r)
+		case r == ';' && !inQuote:
+			segs = append(segs, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	segs = append(segs, cur.String())
+	var out []string
+	for _, s := range segs {
+		s = strings.TrimSpace(s)
+		if s == "" || strings.HasPrefix(s, "echo ") {
+			continue // make's progress labels
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// unwrapLibtool extracts the embedded compiler command from a libtool
+// wrapper: [/bin/sh] [path/]libtool [--silent] [--tag=CC]
+// --mode=compile|link gcc ... Returns nil when not a libtool invocation.
+func unwrapLibtool(fields []string) []string {
+	isLibtool := false
+	for _, f := range fields {
+		base := filepath.Base(f)
+		if base == "libtool" || strings.HasPrefix(base, "libtool ") {
+			isLibtool = true
+			break
+		}
+	}
+	if !isLibtool {
+		return nil
+	}
+	for i, f := range fields {
+		if f == "--mode=compile" || f == "--mode=link" {
+			if i+1 < len(fields) {
+				return fields[i+1:]
+			}
+		}
+	}
+	return nil
 }
 
 // relativizeCC converts absolute source/object paths to project-relative
