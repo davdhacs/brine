@@ -734,18 +734,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 	}
+	// suffix flag-set variants within a dir: lib, lib_2, lib_3...
+	dirLibs := map[string][]*ccLibrary{}
+	for _, lib := range libs {
+		dirLibs[lib.Dir] = append(dirLibs[lib.Dir], lib)
+	}
 	// merge mutually-dependent directories: curl's lib/ and lib/curlx/
 	// (and vauth/vquic/vssh/vtls) include each other's headers, which
 	// Bazel rejects as a dependency cycle. A child dir with no BUILD of
 	// its own belongs to the parent's package — merge child sources into
 	// the ancestor library with subdir-relative paths.
 	mergeCyclicDirs(dirLibs, objOwner, libs)
-
-	// suffix flag-set variants within a dir: lib, lib_2, lib_3...
-	dirLibs := map[string][]*ccLibrary{}
-	for _, lib := range libs {
-		dirLibs[lib.Dir] = append(dirLibs[lib.Dir], lib)
-	}
 	for dir, ls := range dirLibs {
 		sort.Slice(ls, func(i, j int) bool { return ls[i].Name < ls[j].Name })
 		for i := 1; i < len(ls); i++ {
