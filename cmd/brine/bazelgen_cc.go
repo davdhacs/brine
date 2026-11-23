@@ -930,6 +930,28 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		laVariants[l.Out] = keys
 	}
 
+	// laVariants: each .la output -> the lib keys of the objects its
+	// producing link consumed, in link order — a .la bundles every
+	// signature variant that fed it (libcurl.la carries lib, curlx,
+	// vauth, vtls objects), and dependents need them all
+	laVariants := map[string][]string{}
+	for _, l := range links {
+		if !strings.HasSuffix(l.Out, ".la") {
+			continue
+		}
+		var keys []string
+		seen := map[string]bool{}
+		for _, o := range l.Objects {
+			for _, k := range objOwner[o] {
+				if !seen[k] {
+					seen[k] = true
+					keys = append(keys, k)
+				}
+			}
+		}
+		laVariants[l.Out] = keys
+	}
+
 	// one BUILD file per dir: libraries + binaries composed, single write
 	allDirs := map[string]bool{}
 	for dir := range dirLibs {
@@ -1002,13 +1024,16 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// consumers first)
 			var libRefDeps []string
 			for _, ref := range l.LibRefs {
-				// a .la/.a ref deps the DOMINANT variant of the owning
-				// package: the dominant build carries the package's full
-				// object set (merge guarantees same-sig variants united),
-				// and extra variants only pollute --start-lib group
-				// ordering (duplicate symbols across variants, found via
-				// manual no-group link on a Linux worker)
 				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+				if producers, ok := laVariants[refPath]; ok {
+					for _, key := range producers {
+						if lib, ok := libs[key]; ok {
+							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
+						}
+					}
+					continue
+				}
+				// .a or unmatched .la: dominant lib of the owning package
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
