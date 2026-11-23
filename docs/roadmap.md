@@ -27,9 +27,17 @@ Status legend: [x] done+validated, [~] in progress, [ ] next up.
   make == bazel version output). 465 compiles, 7 packages, autotools +
   libtool + automake. The full campaign: 20+ findings, all fixed — see
   "curl campaign findings" below.
-- [~] prometheus gazelle re-validation (tone) — 114 packages; a run was
-  accidentally started (worker cwd); needs a clean, complete run +
-  `bazel build` of a target + findings review.
+- [x] prometheus gazelle re-validation (tone) — **114 packages,
+  validation clean** after --fix closed a real gap: gazelle excludes
+  .pb.go files from srcs (expects proto_library to generate them) but
+  prometheus uses gogo-protobuf codegen — the checked-in .pb.go ARE
+  sources. Go-list validation caught it; --fix repaired 4 findings.
+  Full bazel build blocked on gazelle-bzlmod external-repo gap:
+  go_deps downloads k8s.io/client-go without BUILD files for every
+  package (kubernetes/typed/discovery/v1 et al.) — prometheus itself
+  works around this with custom scripts. Documented as known limitation;
+  fix = run gazelle against external repos or use go_deps' gazelle
+  generation attributes.
 - [ ] cel-go-style fidelity experiment for a C/C++ project.
 
 ## Real-world C/C++ findings so far (keep for the paper)
