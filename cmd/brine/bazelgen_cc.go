@@ -604,18 +604,32 @@ func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string]string
 					for i, h := range lib.Hdrs {
 						lib.Hdrs[i] = prefix + h
 					}
-					// headers under either merged dir are internal now
-					filtered := lib.ExtHdrs[:0]
+					// headers under either merged dir are SAME-PACKAGE now:
+					// declare them on the referencing library (Bazel allows
+					// hdrs from any subdir of the package) instead of a dep
+					// edge — internal deps would recreate the cycle the
+					// merge exists to break, and a separate rule's hdrs are
+					// not action inputs for this rule's compiles
+					var ext []string
 					for _, h := range lib.ExtHdrs {
 						hdir := filepath.ToSlash(filepath.Dir(h))
 						if hdir == "." {
 							hdir = ""
 						}
-						if hdir != parent && hdir != child {
-							filtered = append(filtered, h)
+						if hdir == parent || hdir == child || isAncestor(parent, hdir) {
+							rel := h
+							if parent != "" {
+								rel = strings.TrimPrefix(h, parent+"/")
+							}
+							if !contains(lib.Hdrs, rel) {
+								lib.Hdrs = append(lib.Hdrs, rel)
+							}
+						} else {
+							ext = append(ext, h)
 						}
 					}
-					lib.ExtHdrs = filtered
+					lib.ExtHdrs = ext
+					lib.Hdrs = dedup(lib.Hdrs)
 					dirLibs[parent] = append(dirLibs[parent], lib)
 				}
 				delete(dirLibs, child)
@@ -625,6 +639,32 @@ func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string]string
 			if changed {
 				break
 			}
+		}
+	}
+	// final pass: parent-side libraries also reference merged-away child
+	// headers — convert those to same-package hdrs too
+	for _, ls := range dirLibs {
+		for _, lib := range ls {
+			var ext []string
+			for _, h := range lib.ExtHdrs {
+				hdir := filepath.ToSlash(filepath.Dir(h))
+				if hdir == "." {
+					hdir = ""
+				}
+				if _, live := dirLibs[hdir]; !live && isAncestor(lib.Dir, hdir) {
+					rel := h
+					if lib.Dir != "" {
+						rel = strings.TrimPrefix(h, lib.Dir+"/")
+					}
+					if !contains(lib.Hdrs, rel) {
+						lib.Hdrs = append(lib.Hdrs, rel)
+					}
+				} else {
+					ext = append(ext, h)
+				}
+			}
+			lib.ExtHdrs = ext
+			lib.Hdrs = dedup(lib.Hdrs)
 		}
 	}
 }
