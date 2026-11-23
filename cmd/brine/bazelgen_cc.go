@@ -556,7 +556,7 @@ func relLabelPath(wd, p string) string {
 // when their libraries reference each other's headers (a dependency
 // cycle). Only ancestor-descendant pairs merge (cross-package ../ srcs
 // are illegal in Bazel); sibling cycles surface as findings instead.
-func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string]string, libs map[string]*ccLibrary) {
+func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string][]string, libs map[string]*ccLibrary) {
 	refs := func(dir string) map[string]bool {
 		out := map[string]bool{}
 		for _, lib := range dirLibs[dir] {
