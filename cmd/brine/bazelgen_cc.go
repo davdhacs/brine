@@ -259,7 +259,11 @@ func splitCommand(line string) []string {
 	prev := rune(0)
 	for _, r := range line {
 		switch {
-		case r == '"' && prev != '\\':
+		case r == '"' && prev == '\\':
+			// escaped quote inside a value: emit as literal quote (the
+			// compiler's preprocessor needs the quote, not the backslash)
+			cur.WriteRune(r)
+		case r == '"':
 			inQuote = !inQuote
 		case (r == ' ' || r == '\t') && !inQuote:
 			if cur.Len() > 0 {
