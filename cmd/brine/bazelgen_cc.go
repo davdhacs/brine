@@ -117,33 +117,58 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	return compiles, links, nil
 }
 
-// splitCompound splits a make -n line on semicolons, dropping the
-// pretty-print echo labels (make recipes read: echo "  CC  " foo.lo;
-// /bin/sh libtool ...). Quote-aware: labels contain spaces.
+// splitCompound splits a make -n line on semicolons and && chains,
+// keeping only compiler-shaped segments. Real recipes read:
+//
+//	depbase=...; gcc ... -c foo.c && mv -f $depbase.Tpo $depbase.Po
+//
+// (automake's depfile idiom — unexpanded make variables, mv steps, and
+// echo labels are all dropped; only the gcc command classifies).
+// Quote-aware: labels contain spaces.
 func splitCompound(line string) []string {
 	var segs []string
 	var cur strings.Builder
 	inQuote := false
+	flush := func() {
+		if cur.Len() > 0 {
+			segs = append(segs, cur.String())
+			cur.Reset()
+		}
+	}
 	for _, r := range line {
 		switch {
 		case r == '"':
 			inQuote = !inQuote
 			cur.WriteRune(r)
 		case r == ';' && !inQuote:
-			segs = append(segs, cur.String())
+			flush()
+		case r == '&' && !inQuote && strings.HasSuffix(cur.String(), "&"):
+			// "&&": drop the single & just written, split here
+			t := cur.String()
 			cur.Reset()
+			cur.WriteString(t[:len(t)-1])
+			flush()
 		default:
 			cur.WriteRune(r)
 		}
 	}
-	segs = append(segs, cur.String())
+	flush()
 	var out []string
 	for _, s := range segs {
 		s = strings.TrimSpace(s)
 		if s == "" || strings.HasPrefix(s, "echo ") {
-			continue // make's progress labels
+			continue
 		}
-		out = append(out, s)
+		fields := splitCommand(s)
+		if len(fields) == 0 {
+			continue
+		}
+		first := filepath.Base(fields[0])
+		if ccCompilerRe.MatchString(first) || first == "sh" || first == "bash" || strings.HasPrefix(first, "libtool") {
+			out = append(out, s)
+		}
+		// everything else (depbase=..., mv -f $x, test -f ...) is make
+		// bookkeeping with unexpanded variables — not runnable, dropped
 	}
 	return out
 }
@@ -366,7 +391,15 @@ func captureDepfiles(compiles []ccCompile, wd string) error {
 		depFile := filepath.Join(tmpDir, fmt.Sprintf("dep%d.d", i))
 		throwObj := filepath.Join(tmpDir, fmt.Sprintf("throw%d.o", i))
 		args := stripCCFlags(append([]string{}, c.Cmd...), "-o", "-MD", "-MMD", "-MF", "-MT", "-MQ", "-no-canonical-prefixes")
-		args = append(args, "-MD", "-MF", depFile, "-o", throwObj)
+		// drop unexpanded make/shell variables (automake depbase idiom:
+		// "-MT $depbase.Tpo") — exec has no shell to expand them
+		var clean []string
+		for _, a := range args {
+			if !strings.Contains(a, "$") {
+				clean = append(clean, a)
+			}
+		}
+		args = append(clean, "-MD", "-MF", depFile, "-o", throwObj)
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = c.CtxDir
 		if cmd.Dir == "" {
