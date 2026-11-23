@@ -23,9 +23,46 @@ Status legend: [x] done+validated, [~] in progress, [ ] next up.
 - [x] `brine bazel-generate` (C/C++) — dry-run discovery, depfile capture,
   flag-signature libraries, combined compile+link, linkopts.
   sqlite 3.50.4 PARITY-IDENTICAL on tone (make == bazel version output).
-- [~] curl validation (tone) — libtool stress test in flight.
-  Expected finding: `/bin/sh ../libtool --mode=compile gcc ...` wrappers
-  defeat the classifier; needs embedded-command extraction.
+- [~] curl validation (tone) — 12 real-world findings fixed; ONE symbol
+  from parity. Full state below in "curl campaign".
+  NEXT FIX: the curl binary needs deps on the src-context curlx variant
+  (curlx_now lives in curlx/timeval.c, compiled from the src/ make
+  context with USE_MANUAL flags — merged into the lib package as a
+  numbered variant). The link objects ../lib/curlx/curl-*.o resolve via
+  basename fallback but the chosen variant lacks them; likely fix: dep
+  ALL package variants that compile any consumed object basename, or
+  resolve the link object path directly (joinCtx(src, ../lib/curlx/...)
+  = lib/curlx/curl-timeval.o — the src-context compile's -o should match
+  this exactly; verify with BRINE_CC_DEBUG | grep timeval).
+
+#### curl campaign findings (all fixed, keep for the paper)
+
+1. libtool wrappers: `/bin/sh ../libtool --mode=compile gcc ...` —
+   unwrap to the embedded command after --mode=compile|link.
+2. make -n progress labels: `echo "  CC  " x.lo;<cmd>` — compound `;`
+   splitting, keep only compiler-shaped segments.
+3. automake VPATH quoting: `test -f 'x.c' || echo './'`x.c backtick
+   fragments — strip at LINE level (they contain spaces; field
+   splitting shatters them into argv debris).
+4. `&&` chains: `gcc ... && mv -f $depbase.Tpo $depbase.Po` — split,
+   drop make-variable segments (mv/test/depbase=).
+5. Unexpanded make variables ($depbase) in argv — filter $-args.
+6. make recursion markers: `make[1]: Entering directory '.../lib'` —
+   commands carry paths relative to THEIR context; track a stack.
+7. .lo libtool objects in link classification; .la outputs are library
+   hints not binaries.
+8. Depfile paths relative to the compile's CONTEXT dir — depfiles.Parse
+   rejected ..-paths from sibling contexts; ParseCtx added.
+9. Mutual header includes between dirs (lib <-> lib/curlx) = Bazel
+   dependency cycle — merge child dirs into the ancestor package,
+   declare same-package headers on every flag variant (union).
+10. Externally-referenced headers (curlx/curlx.h read ONLY by
+    src/tool_setup.h) — declare on the owning package's primary.
+11. .la/.a library inputs on link lines become package deps; primary =
+    dominant build (most srcs), not alphabetical.
+12. Object paths compiled by MULTIPLE flag variants (automake reuses
+    names across targets; unittest tool_main.o has no main()) —
+    multi-owner map, dep the dominant variant.
 - [~] prometheus gazelle re-validation (tone) — 114 packages; a run was
   accidentally started (worker cwd); needs a clean, complete run +
   `bazel build` of a target + findings review.
