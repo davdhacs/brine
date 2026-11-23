@@ -27,7 +27,9 @@ The client never runs the toolchain. Content addressing means the
 client's trust boundary is the hash: a malicious or corrupted worker
 cannot serve wrong bytes without the client detecting it on restore.
 
-## Measured (localhost two-clone demo, Azure westus3 blob store)
+## Measured
+
+localhost two-clone demo (k8swatch, Azure westus3):
 
 | phase | wall |
 |---|---|
@@ -35,9 +37,23 @@ cannot serve wrong bytes without the client detecting it on restore.
 | worker receipt hit | 145ms |
 | client restore (11MB binary, verified) | 2.4s |
 
-The client restore is dominated by blob transfer — same-region Azure CI
-would be substantially faster, and the serve batch endpoint (planned)
-would amortize per-blob request overhead for multi-output builds.
+real two-machine run (mac client → Linux homelab worker "tone",
+prometheus, 148MB binary, same Azure store):
+
+| phase | wall |
+|---|---|
+| worker cold build (module downloads + compile) | 197s |
+| worker warm relink (gocache hit) | 15.2s |
+| worker receipt hit | 1.9s |
+| client restore (148MB streamed from Azure, sha256 verified) | 33s |
+
+The client restore is dominated by blob transfer from the Azure region —
+same-region CI would be substantially faster. Blob fetches stream to
+disk with stall detection (no total timeout): a fixed 30s cap killed
+legitimate 148MB transfers and the error was masked as "blob not found"
+until the streaming fix. Hit paths now re-share local receipts to the
+remote store (EnsureRemote, existence-checked) — receipts built while
+the remote was down no longer stay invisible to other machines.
 
 ## Notes
 
