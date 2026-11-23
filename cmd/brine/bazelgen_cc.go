@@ -959,11 +959,15 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					depList = append(depList, lbl)
 				}
 			}
-			// project library inputs (.la/.a): dep on the owning package
+			// project library inputs (.la/.a): dep on the owning package —
+			// appended AFTER object deps: the observed link line places
+			// libraries after objects, and --start-lib groups need
+			// consumers first
+			var libRefDeps []string
 			for _, ref := range l.LibRefs {
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(relTo(wd, joinCtx(l.CtxDir, ref)))))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
-					addDep(ccLabel(rdir, primary.Name))
+					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
 				}
 			}
 			// combined compile+link sources that no same-signature library
@@ -1037,6 +1041,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					}
 				}
 			}
+			for _, d := range libRefDeps {
+				addDep(d)
+			}
 			// emit the link-signature library before the binary
 			if len(linkLibSrcs) > 0 {
 				var sdirs []string
@@ -1095,7 +1102,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			b.WriteString("cc_binary(\n")
 			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
 			if len(depList) > 0 {
-				writeSortedStrings(&b, "deps", depList)
+				writeOrderedStrings(&b, "deps", depList)
 			}
 			// system libraries the observed link used (-lreadline -lz ...):
 			// without them the link fails on undefined references
@@ -1141,6 +1148,19 @@ func ccLabel(dir, name string) string {
 		return "//:" + name
 	}
 	return "//" + dir + ":" + name
+}
+
+// writeOrderedStrings writes an attr list preserving order — critical
+// for cc_binary deps: Bazel's --start-lib archive groups only resolve
+// symbols already undefined at group-processing time, so consumers must
+// precede producers (the observed link line's order is correct by
+// construction; alphabetical order is not).
+func writeOrderedStrings(b *strings.Builder, attr string, items []string) {
+	fmt.Fprintf(b, "    %s = [\n", attr)
+	for _, s := range items {
+		fmt.Fprintf(b, "        %q,\n", s)
+	}
+	b.WriteString("    ],\n")
 }
 
 func writeSortedStrings(b *strings.Builder, attr string, items []string) {
