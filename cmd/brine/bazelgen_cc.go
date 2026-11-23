@@ -1188,15 +1188,19 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 			for _, o := range l.Objects {
 				if c, ok := lookupCompile(o); ok {
-					// headers the binary's compiles read (same-package):
-					// the binary needs them declared to compile its srcs
+					// headers the binary's compiles read: same-package ones
+					// become srcs inputs; foreign ones dep their package
+					// (header-only packages for include/ dirs)
 					for _, h := range c.Headers {
-						hrel := h
-						if dir != "" && strings.HasPrefix(h, dir+"/") {
-							hrel = strings.TrimPrefix(h, dir+"/")
+						hdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(h)))
+						if hdir != dir {
+							if ls, live := dirLibs[hdir]; live {
+								addDep(ccLabel(hdir, ls[0].Name))
+							}
+							continue
 						}
-						if !contains(srcHdrs, hrel) {
-							srcHdrs = append(srcHdrs, hrel)
+						if !contains(srcHdrs, h) {
+							srcHdrs = append(srcHdrs, h)
 						}
 					}
 					src := c.Src // already project-relative (relativized at classify)
@@ -1224,8 +1228,12 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 						srcList = append(srcList, src)
 					}
 					for _, h := range srcHdrs {
-						if !contains(srcList, h) {
-							srcList = append(srcList, h) // headers as inputs
+						hrel := h
+						if dir != "" && strings.HasPrefix(h, dir+"/") {
+							hrel = strings.TrimPrefix(h, dir+"/")
+						}
+						if !contains(srcList, hrel) {
+							srcList = append(srcList, hrel) // headers as inputs
 						}
 					}
 					for _, d := range c.Defines {
