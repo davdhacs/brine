@@ -778,9 +778,9 @@ func buildCCModel(compiles []ccCompile, links []ccLink, wd string) *ccModel {
 	// twice with different defines (sqlite compiles its amalgamation for
 	// both the library and the shell) cannot live in one cc_library —
 	// different flag sets get different targets.
-	libs := map[string]*ccLibrary{}      // key: dir + "|" + flag signature
-	objCompile := map[string]ccCompile{} // obj path -> its compile (src, defines)
-	objOwner := map[string][]string{}    // obj path -> lib keys (a path can be
+	libs := m.libs             // key: dir + "|" + flag signature
+	objCompile := m.objCompile // obj path -> its compile (src, defines)
+	objOwner := m.objOwner     // obj path -> lib keys (a path can be
 	// compiled by several flag variants — automake reuses object names
 	// across targets; curl's unittest build overwrites curl-tool_main.o
 	// with a main()-less compile, found via nm on a Linux worker)
