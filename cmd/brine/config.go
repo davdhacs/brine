@@ -45,6 +45,12 @@ type Config struct {
 	// Env override: BRINE_KEY_FILES=glob1,glob2
 	KeyFiles []string `json:"key_files,omitempty"`
 
+	// KeyImages: docker image refs folded into keys beyond the tracked
+	// tree (resolved to local digests at key time). Escape hatch for
+	// docker run/build shapes; `docker exec` containers are detected
+	// from the command automatically. Env override: BRINE_KEY_IMAGES
+	KeyImages []string `json:"key_images,omitempty"`
+
 	// BuildVCS: "off" disables VCS key-folding (promise that stamping
 	// is disabled in your build). Default "key-fold".
 	BuildVCS string `json:"buildvcs,omitempty"`
@@ -107,6 +113,9 @@ func loadConfig(wd string) Config {
 	}
 	if v := os.Getenv("BRINE_KEY_FILES"); v != "" {
 		c.KeyFiles = splitTrim(v)
+	}
+	if v := os.Getenv("BRINE_KEY_IMAGES"); v != "" {
+		c.KeyImages = splitTrim(v)
 	}
 	if v := os.Getenv("BRINE_WRITES"); v == "0" {
 		f := false

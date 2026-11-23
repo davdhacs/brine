@@ -222,7 +222,124 @@ func localDigest(image string) string {
 // Each found config also AUDIT-warns: it is keyed, but it is not
 // shared (uncommitted) — pin it for team-wide determinism.
 
-func keyTail(wd string) string {
+// dockerExecContainer extracts the container name from a `docker exec`
+// command line, or "" if the command isn't docker exec.
+func dockerExecContainer(args []string) string {
+	if len(args) < 3 || args[0] != "docker" || args[1] != "exec" {
+		return ""
+	}
+	// flags that consume the following argument
+	valueFlags := map[string]bool{
+		"-e": true, "--env": true, "-u": true, "--user": true,
+		"-w": true, "--workdir": true, "--env-file": true,
+	}
+	for i := 2; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			return a // first non-flag argument = container name
+		}
+		if strings.Contains(a, "=") {
+			continue // --env=VAL form: self-contained
+		}
+		if valueFlags[a] {
+			i++ // skip the consumed value
+		}
+	}
+	return ""
+}
+
+// dockerExecKeyExtras folds the exec container's environment identity
+// into the receipt key: image digest (the content address for the
+// entire toolchain — compilers, headers, sysroot — one hash instead
+// of hashing the image contents), the mount table (host↔container
+// mapping), and run-time container env (sorted). `docker exec` is
+// otherwise opaque to observation: the build reads mounted sources
+// and image files inside the container, invisible to host-side
+// sensors. Not cached: a build that recreates its own container must
+// re-resolve at key time.
+func dockerExecKeyExtras(args []string) string {
+	container := dockerExecContainer(args)
+	if container == "" {
+		return ""
+	}
+	out, err := exec.Command("docker", "inspect",
+		"--format", "{{.Image}}\n{{json .Config.Env}}\n{{json .Mounts}}",
+		container).Output()
+	if err != nil {
+		// Container missing or docker unavailable: the exec itself
+		// will fail in that case — nothing sound to fold here.
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 {
+		return ""
+	}
+	image := strings.TrimSpace(lines[0])
+	envHash := sha256Hex(normalizeJSONList(lines[1]))
+	mountHash := sha256Hex(normalizeMounts(lines[2]))
+	if image == "" {
+		return ""
+	}
+	return "execenv:image=" + image + ",env=" + envHash[:16] + ",mounts=" + mountHash[:16]
+}
+
+// normalizeJSONList parses a JSON array, sorts its elements, and
+// joins them — an order-insensitive digest input.
+func normalizeJSONList(s string) string {
+	var arr []interface{}
+	if json.Unmarshal([]byte(s), &arr) != nil {
+		return s
+	}
+	parts := make([]string, 0, len(arr))
+	for _, el := range arr {
+		b, _ := json.Marshal(el)
+		parts = append(parts, string(b))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
+}
+
+// normalizeMounts parses `docker inspect .Mounts`, drops host-side
+// Source paths (machine-specific; content identity lives in the file
+// hashes), keeps destination/type/mode/RW, sorts by destination.
+// Dropping Source makes receipts shareable across workers that keep
+// the repo at different paths.
+func normalizeMounts(s string) string {
+	var mounts []map[string]interface{}
+	if json.Unmarshal([]byte(s), &mounts) != nil {
+		return s
+	}
+	type mtab struct {
+		dest, typ, mode string
+		rw              bool
+	}
+	var tabs []mtab
+	for _, m := range mounts {
+		rw := false
+		if v, ok := m["RW"].(bool); ok {
+			rw = v
+		}
+		tabs = append(tabs, mtab{
+			dest: fmt.Sprint(m["Destination"]),
+			typ:  fmt.Sprint(m["Type"]),
+			mode: fmt.Sprint(m["Mode"]),
+			rw:   rw,
+		})
+	}
+	sort.Slice(tabs, func(i, j int) bool { return tabs[i].dest < tabs[j].dest })
+	var b strings.Builder
+	for _, t := range tabs {
+		fmt.Fprintf(&b, "%s:%s:%s:rw=%v\n", t.dest, t.typ, t.mode, t.rw)
+	}
+	return b.String()
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func keyTail(wd string, args []string) string {
 	var parts []string
 
 	cfg := loadConfig(wd)
@@ -237,6 +354,25 @@ func keyTail(wd string) string {
 					parts = append(parts, "file:"+filepath.Base(f)+"="+v)
 				}
 			}
+		}
+	}
+
+	// Docker exec: the container's image digest, mount table, and env
+	// are invisible inputs — observation cannot see inside the
+	// container, and the git-tracked closure does not cover the image.
+	if ex := dockerExecKeyExtras(args); ex != "" {
+		parts = append(parts, ex)
+	}
+
+	// Declared image refs (docker run/build shapes the command parser
+	// doesn't cover): resolved to local digests at key time.
+	for _, ref := range cfg.KeyImages {
+		if d := localDigest(ref); d != "" {
+			parts = append(parts, "image:"+ref+"="+d)
+		} else {
+			// Unresolvable image in key_images: fold the ref itself so
+			// the key still changes if the config changes.
+			parts = append(parts, "image:"+ref+"=unresolved")
 		}
 	}
 

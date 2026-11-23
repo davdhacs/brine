@@ -45,38 +45,34 @@ Status legend: [x] done+validated, [~] in progress, [ ] next up.
   (git-tracked fallback: docker exec is opaque to observation,
   ~20K files) + 7.5min eager download of all outputs (898 files
   where only the binary matters). Two optimization targets below.
-- [~] Docker-native closure (`key_images`) — fold the builder image
-  digest into the receipt key. `docker inspect` gives:
-  `.Image` (sha256 content address for the entire toolchain —
-  gRPC, protobuf, gcc, sysroot — one hash replaces hashing
-  thousands of system files) and `.Mounts` (the bind-mount table,
-  folded in as the host↔container mapping). The containerized-
-  builder pattern bind-mounts source (never COPY: no context
-  transfer, outputs flow back out, source mutates / image is
-  immutable), so the closure splits cleanly: image digest covers
-  the environment half, normal host-side hashing covers the
-  mounted source half. Remaining source-side cost needs
-  key_files/depfile precision (~200 files from depfiles vs 20K
-  git-tracked) — the collector case study already proved 1.6s
-  receipt hits with that closure. Design: `key_images` config
-  listing image refs (resolved via docker inspect at closure
-  time) + mount table from the running container; no hashing
-  inside the image ever happens.
-- [~] Remote-build report-only + selective restore — separate
-  "build succeeded" from "fetch the bytes" (Bazel REAPI model:
-  ActionResult vs CAS fetching). Plan:
-  1. `remote-build` default becomes report-only: dispatch →
-     receipt key → print output summary (count, bytes, notable
-     paths from the manifest, which is already fetched — ~270KB
-     metadata) → exit. No blob downloads.
-  2. New `brine restore <key> [pattern]` — selective fetch by
-     path pattern, verify-on-restore, place at manifest-relative
-     paths. `brine restore <key>` = everything.
-  3. `remote-build --restore` keeps the eager behavior for
-     callers that want it.
-  Collector numbers: full eager 7.5min/1.6GB → report-only ~0s
-  + selective binary fetch ~30s/82MB. Combined with the closure
-  fix, warm remote-build target: ~30s end-to-end.
+- [x] Docker-native closure (`key_images`) — DONE and validated
+  end-to-end on Docker Desktop: `docker exec <container> ...`
+  commands now fold the container's image digest (content address
+  for the whole toolchain), mount table (host Source paths dropped —
+  receipts share across workers with the repo at different paths),
+  and run-time env (sorted) into the receipt key automatically, via
+  one `docker inspect` at key time. Validation: same container →
+  commit-receipt hit; recreated from busybox → MISS (key moved,
+  divergence detector correctly classified "hidden input, outputs
+  identical"); mount moved to /data → MISS. `key_images` config
+  (BRINE_KEY_IMAGES) is the manual form for docker run shapes.
+  Folded through keyTail so every key path (pre-build check, warm
+  path, store, record, commit fast-path) stays consistent.
+  NOTE: old receipts computed without execenv won't match (one-time
+  invalidation — correct: they didn't track the image). Remaining
+  source-side cost needs key_files/depfile precision (~200 files
+  from depfiles vs 20K git-tracked) — still open, next item.
+- [x] Remote-build report-only + selective restore — DONE and
+  validated end-to-end (local worker + Azure): remote-build default
+  now dispatches and reports the manifest summary only (client holds
+  metadata, zero blobs); `brine restore <key> [pattern]` fetches
+  selectively (substring or glob match, verify-on-restore);
+  `--restore` keeps eager behavior. Collector numbers: eager
+  7.5min/1.6GB → report-only ~0s + selective 82MB binary 18.9s.
+- [ ] Collector closure precision — key_files/depfile closure
+  (~200 files, proven 1.6s in the case study) replacing the 20K-file
+  git-tracked fallback that cost 13.6 min. Combined with the two
+  items above: ~30s warm collector remote-build.
 - [ ] cel-go-style fidelity experiment for a C/C++ project.
 
 ## Real-world C/C++ findings so far (keep for the paper)

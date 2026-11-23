@@ -261,6 +261,34 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 	return count, total, nil
 }
 
+// RestoreManifestMatching restores only blobs whose manifest-relative
+// path matches the pattern: filepath.Match (glob) when the pattern
+// contains glob characters (* ? [), substring match otherwise —
+// `brine restore <key> collector` fetches every output with
+// "collector" in its path without remembering the full layout.
+func (s *Store) RestoreManifestMatching(m *Manifest, dir, pattern string) (int, int64, error) {
+	hasGlob := strings.ContainsAny(pattern, "*?[")
+	sub := &Manifest{Key: m.Key, BuiltAt: m.BuiltAt}
+	for _, ref := range m.Blobs {
+		match := false
+		if hasGlob {
+			match, _ = filepath.Match(pattern, ref.Path)
+			if !match {
+				match, _ = filepath.Match(pattern, filepath.Base(ref.Path))
+			}
+		} else {
+			match = strings.Contains(ref.Path, pattern)
+		}
+		if match {
+			sub.Blobs = append(sub.Blobs, ref)
+		}
+	}
+	if len(sub.Blobs) == 0 {
+		return 0, 0, fmt.Errorf("no outputs match %q (manifest has %d outputs)", pattern, len(m.Blobs))
+	}
+	return s.RestoreManifest(sub, dir)
+}
+
 // SnapshotDir walks dir and stores every file as a blob, returning
 // a Manifest with the results. Files matching exclude patterns are
 // skipped.

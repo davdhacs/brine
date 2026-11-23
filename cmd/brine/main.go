@@ -90,6 +90,8 @@ func main() {
 		cmdWorker(args[1:])
 	case args[0] == "remote-build":
 		cmdRemoteBuild(args[1:])
+	case args[0] == "restore":
+		cmdRestore(args[1:])
 	case args[0] == "bazel-generate":
 		cmdBazelGenerate(args[1:])
 	case args[0] == "serve":
@@ -122,6 +124,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, "\nUsage:\n")
 	fmt.Fprintf(os.Stderr, "  brine [--shadow] <command> [args...]  memoize a command\n")
 	fmt.Fprintf(os.Stderr, "  brine audit <command> [args...]       force full rebuild + score model\n")
+	fmt.Fprintf(os.Stderr, "  brine restore <key> [pattern]         fetch receipt outputs (selective)\n")
 	fmt.Fprintf(os.Stderr, "  brine status | gc | clear\n")
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
 	fmt.Fprintf(os.Stderr, "  --shadow   score learned predictions without trusting them\n")
@@ -184,7 +187,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// no commit receipt exists.
 	if !forceFull && !isDocker {
 		keyCommand := command
-		if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd), toolchain); ok && st.HasManifest(ck) {
+		if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd, args), toolchain); ok && st.HasManifest(ck) {
 			if m, err := st.GetManifest(ck); err == nil && len(m.Blobs) > 0 {
 				// Commit receipts vouch for the TREE, not untracked
 				// configs: a config on disk that this receipt does not
@@ -224,7 +227,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			// not in the read-set — the warm path must compare the
 			// recorded tail explicitly or it serves stale receipts
 			// across config flips.
-			tailNow := keyTail(wd)
+			tailNow := keyTail(wd, args)
 			toolchainOK := !isGo || m.Toolchain == toolchain
 			tailOK := m.KeyTail == tailNow
 			vcsOK := !isGo || !vcsFoldActive() || m.VCSCommit == gitHead(wd)
@@ -262,7 +265,7 @@ func cmdMemoize(args []string, forceFull bool) {
 					fmt.Printf("[brine]   %d outputs, %.1f MB, strategy=%s (%s)\n",
 						count, float64(bytes)/1024/1024, m.Strategy,
 						time.Since(start).Round(time.Millisecond))
-					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
+					storeCommitReceiptIfClean(st, m, wd, command, toolchain, args)
 					recordHit(mod, command)
 					if metricsLogger != nil {
 						metricsLogger.Log(&metrics.Run{Command: command, Hit: true, WallMs: time.Since(start).Milliseconds()})
@@ -281,7 +284,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// restoring files.
 	if isDocker && !forceFull {
 		if ctxFiles := dockerContextClosure(wd, args); len(ctxFiles) > 0 {
-			dk := key.FromFiles(wd, ctxFiles, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd)+dockerKeyExtras(wd, args))
+			dk := key.FromFiles(wd, ctxFiles, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd, args)+dockerKeyExtras(wd, args))
 			if st.HasManifest(dk) {
 				if m, err := st.GetManifest(dk); err == nil && len(m.ImageOutputs) > 0 {
 					allOK := true
@@ -322,7 +325,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			runPlain(args)
 			return
 		}
-		k := key.FromFiles(wd, readSet, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd))
+		k := key.FromFiles(wd, readSet, dockerKeyCommand(command, args)+"|"+toolchain+vcsFold(wd)+keyTail(wd, args))
 		if !forceFull && st.HasManifest(k) {
 			if m, err := st.GetManifest(k); err == nil {
 				count, bytes, err := st.RestoreManifest(m, wd)
@@ -339,7 +342,7 @@ func cmdMemoize(args []string, forceFull bool) {
 					fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 						count, float64(bytes)/1024/1024,
 						time.Since(start).Round(time.Millisecond))
-					storeCommitReceiptIfClean(st, m, wd, command, toolchain)
+					storeCommitReceiptIfClean(st, m, wd, command, toolchain, args)
 					recordHit(mod, command)
 					if metricsLogger != nil {
 						metricsLogger.Log(&metrics.Run{Command: command, Hit: true, WallMs: time.Since(start).Milliseconds()})
@@ -421,7 +424,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
 			candidates := unionFiles(gitFiles, untrackedConfigs(wd))
 			if len(candidates) > 0 {
-				pk := key.FromFiles(wd, candidates, command+"|"+toolchain+vcsFold(wd)+keyTail(wd))
+				pk := key.FromFiles(wd, candidates, command+"|"+toolchain+vcsFold(wd)+keyTail(wd, args))
 				if st.HasManifest(pk) {
 					if m, err := st.GetManifest(pk); err == nil && len(m.Blobs) > 0 {
 						// The stored read-set may be a SUBSET (generated
@@ -442,7 +445,7 @@ func cmdMemoize(args []string, forceFull bool) {
 								fmt.Printf("[brine]   %d outputs, %.1f MB (%s)\n",
 									count, float64(bytes)/1024/1024,
 									time.Since(start).Round(time.Millisecond))
-								storeCommitReceiptIfClean(st, m, wd, command, toolchain)
+								storeCommitReceiptIfClean(st, m, wd, command, toolchain, args)
 								recordHit(mod, command)
 								return
 							}
@@ -627,7 +630,7 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 		extras = dockerKeyExtras(wd, args)
 	}
-	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd)+extras)
+	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd, args)+extras)
 	var m *store.Manifest
 	if isDocker {
 		// Image-level receipt: outputs are image IDs, not files.
@@ -696,7 +699,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	m.BuiltAt = builtAt
 	m.ActionStats = actionStats
 	m.VCSCommit = gitHead(wd)
-	m.KeyTail = keyTail(wd)
+	m.KeyTail = keyTail(wd, args)
 	m.ClosureHash = key.ClosureHash(wd, readSet)
 
 	// Nondeterminism detector: same closure, different key or different
@@ -725,7 +728,7 @@ func cmdMemoize(args []string, forceFull bool) {
 	// Commit receipt: same manifest under the git-HEAD key (blobs are
 	// content-addressed — zero extra storage; just a second index).
 	if !isDocker {
-		storeCommitReceiptIfClean(st, m, wd, keyCommand, toolchain)
+		storeCommitReceiptIfClean(st, m, wd, keyCommand, toolchain, args)
 	}
 
 	// Docker image: also save to blob store for cross-machine restore
@@ -828,11 +831,11 @@ func cmdMemoize(args []string, forceFull bool) {
 // hits: a clean tree + a valid closure receipt implies the commit
 // receipt, so the first hit at any commit makes every later run at
 // that commit take the fast path (no go list, no module cache).
-func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyCommand, toolchain string) {
+func storeCommitReceiptIfClean(st *store.Store, m *store.Manifest, wd, keyCommand, toolchain string, args []string) {
 	if m.KeyKind != "" {
 		return // already an alias
 	}
-	if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd), toolchain); ok {
+	if ck, ok := commitReceiptKey(wd, keyCommand+keyTail(wd, args), toolchain); ok {
 		cm := *m
 		cm.Key = ck
 		cm.KeyKind = "commit"
@@ -1429,7 +1432,7 @@ func cmdRecord(args []string) {
 			keyCommand = strings.ReplaceAll(keyCommand, " "+t+" ", " ")
 		}
 	}
-	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd))
+	k := key.FromFiles(wd, readSet, keyCommand+"|"+toolchain+vcsFold(wd)+keyTail(wd, args))
 
 	var m *store.Manifest
 	if isDocker {
@@ -1450,7 +1453,7 @@ func cmdRecord(args []string) {
 	m.ReadSet = readSet
 	m.BuiltAt = builtAt
 	m.VCSCommit = gitHead(wd)
-	m.KeyTail = keyTail(wd)
+	m.KeyTail = keyTail(wd, args)
 	outputDirs := map[string]bool{}
 	for _, b := range m.Blobs {
 		p := b.Path
