@@ -815,6 +815,21 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	for _, lib := range libs {
 		dirLibs[lib.Dir] = append(dirLibs[lib.Dir], lib)
 	}
+	// deterministic variant numbering: map iteration order is random per
+	// run, which reshuffled lib/lib_2..N names between generations and
+	// made builds flip between passing and failing on which variant a
+	// dep landed on (found via repeated curl runs: main undefined, then
+	// not, then again)
+	for dir, ls := range dirLibs {
+		sort.Slice(ls, func(i, j int) bool {
+			// by source count descending (dominant first), then name
+			if len(ls[i].Srcs) != len(ls[j].Srcs) {
+				return len(ls[i].Srcs) > len(ls[j].Srcs)
+			}
+			return ls[i].Name < ls[j].Name
+		})
+		dirLibs[dir] = ls
+	}
 	// merge mutually-dependent directories: curl's lib/ and lib/curlx/
 	// (and vauth/vquic/vssh/vtls) include each other's headers, which
 	// Bazel rejects as a dependency cycle. A child dir with no BUILD of
