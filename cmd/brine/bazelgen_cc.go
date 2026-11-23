@@ -745,15 +745,25 @@ func isSystemInclude(inc string) bool {
 	return false
 }
 
-// generateCCBuilds writes BUILD.bazel files from the observed model.
-// One file per directory, written once (idempotent regeneration): all of
-// the dir's cc_library rules (one per flag signature) followed by the
-// cc_binary rules whose outputs live there.
-func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
+// buildCCModel constructs the shared model: per-dir flag-signature
+// libraries, merges, deterministic naming, and the object/compile maps.
+// Generation and validation BOTH use this — a single source of truth so
+// the validator can never drift from what generation emits.
+type ccModel struct {
+	dirLibs    map[string][]*ccLibrary
+	libs       map[string]*ccLibrary
+	objOwner   map[string][]string
+	objCompile map[string]ccCompile
+	laVariants map[string][]string
+}
+
+func buildCCModel(compiles []ccCompile, links []ccLink, wd string) *ccModel {
 	debug := os.Getenv("BRINE_CC_DEBUG") == "1"
-
-	var findings []finding
-
+	m := &ccModel{
+		libs:       map[string]*ccLibrary{},
+		objOwner:   map[string][]string{},
+		objCompile: map[string]ccCompile{},
+	}
 	// group compiles by (dir, flag signature): the same source compiled
 	// twice with different defines (sqlite compiles its amalgamation for
 	// both the library and the shell) cannot live in one cc_library —
@@ -848,6 +858,22 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			ls[i].Name = fmt.Sprintf("%s_%d", ccLibName(dir), i+1)
 		}
 	}
+
+	m.dirLibs = dirLibs
+	return m
+}
+
+// generateCCBuilds writes BUILD.bazel files from the observed model.
+// One file per directory, written once (idempotent regeneration): all of
+// the dir's cc_library rules (one per flag signature) followed by the
+// cc_binary rules whose outputs live there.
+func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
+	debug := os.Getenv("BRINE_CC_DEBUG") == "1"
+
+	var findings []finding
+
+	model := buildCCModel(compiles, links, wd)
+	dirLibs, libs, objOwner, objCompile := model.dirLibs, model.libs, model.objOwner, model.objCompile
 
 	// headers referenced by OTHER packages' compiles but read by no
 	// compile of this package (curl: curlx/curlx.h is included only by
@@ -1168,80 +1194,115 @@ func writeSortedStrings(b *strings.Builder, attr string, items []string) {
 // Mirrors the Go validator's finding discipline.
 func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
 	var findings []finding
+	model := buildCCModel(compiles, links, wd)
+	dirLibs, libs, objOwner, objCompile := model.dirLibs, model.libs, model.objOwner, model.objCompile
+
 	// observed model: dir -> srcs, same-dir hdrs, cross-dir deps, defines
 	type dirModel struct {
 		srcs, hdrs, deps, defines []string
 	}
-	model := map[string]*dirModel{}
-	objOwner := map[string]string{}
+	dm := map[string]*dirModel{}
 	for _, c := range compiles {
 		dir := filepath.ToSlash(filepath.Dir(c.Src))
 		if dir == "." {
 			dir = ""
 		}
-		m, ok := model[dir]
+		mod, ok := dm[dir]
 		if !ok {
-			m = &dirModel{}
-			model[dir] = m
+			mod = &dirModel{}
+			dm[dir] = mod
 		}
-		if !contains(m.srcs, filepath.Base(c.Src)) {
-			m.srcs = append(m.srcs, filepath.Base(c.Src))
+		if !contains(mod.srcs, filepath.Base(c.Src)) {
+			mod.srcs = append(mod.srcs, filepath.Base(c.Src))
 		}
-		objOwner[c.Obj] = dir
 		for _, h := range c.Headers {
 			hdir := filepath.ToSlash(filepath.Dir(h))
 			if hdir == "." {
 				hdir = ""
 			}
 			if hdir == dir {
-				if !contains(m.hdrs, filepath.Base(h)) {
-					m.hdrs = append(m.hdrs, filepath.Base(h))
+				if !contains(mod.hdrs, filepath.Base(h)) {
+					mod.hdrs = append(mod.hdrs, filepath.Base(h))
 				}
 			} else {
 				pdir := hdir
 				for {
-					if _, known := model[pdir]; known || pdir == "" {
+					if _, known := dm[pdir]; known || pdir == "" {
 						break
 					}
-					i := strings.LastIndexByte(pdir, '/')
-					if i < 0 {
+					k := strings.LastIndexByte(pdir, '/')
+					if k < 0 {
 						break
 					}
-					pdir = pdir[:i]
+					pdir = pdir[:k]
 				}
-				if _, known := model[pdir]; known {
+				if _, known := dm[pdir]; known {
 					lbl := ccLabel(pdir, ccLibName(pdir))
-					if !contains(m.deps, lbl) {
-						m.deps = append(m.deps, lbl)
+					if !contains(mod.deps, lbl) {
+						mod.deps = append(mod.deps, lbl)
 					}
 				}
 			}
 		}
 		for _, d := range c.Defines {
-			if !contains(m.defines, d) {
-				m.defines = append(m.defines, d)
+			if !contains(mod.defines, d) {
+				mod.defines = append(mod.defines, d)
 			}
 		}
 	}
-	// binary deps from links
-	binDeps := map[string][]string{} // binary name -> required lib labels
+	// binary deps: make model — own-package srcs, foreign variant deps,
+	// .la dominant deps
+	binDeps := map[string][]string{}
+	binSrcs := map[string][]string{}
 	for _, l := range links {
 		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") || strings.HasSuffix(l.Out, ".la") {
-			continue // same skip as generation: libraries are covered by cc_library
+			continue
 		}
 		var deps []string
+		var srcs []string
+		binDirV := filepath.ToSlash(filepath.Dir(l.Out))
+		if binDirV == "." {
+			binDirV = ""
+		}
 		for _, o := range l.Objects {
-			if od, ok := objOwner[o]; ok {
-				lbl := ccLabel(od, ccLibName(od))
+			if c, ok := objCompile[o]; ok {
+				src := relTo(wd, joinCtx(c.CtxDir, c.Src))
+				sdir := filepath.ToSlash(filepath.Dir(src))
+				if sdir == "." {
+					sdir = ""
+				}
+				if sdir != binDirV {
+					if keys, ok := objOwner[o]; ok && len(keys) > 0 {
+						if lib, ok := libs[keys[0]]; ok {
+							lbl := ccLabel(lib.Dir, lib.Name)
+							if !contains(deps, lbl) {
+								deps = append(deps, lbl)
+							}
+						}
+					}
+				} else {
+					if !contains(srcs, src) {
+						srcs = append(srcs, src)
+					}
+				}
+				continue
+			}
+		}
+		for _, ref := range l.LibRefs {
+			refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+			rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
+			if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
+				lbl := ccLabel(rdir, primary.Name)
 				if !contains(deps, lbl) {
 					deps = append(deps, lbl)
 				}
 			}
 		}
 		binDeps[filepath.Base(l.Out)] = deps
+		binSrcs[filepath.Base(l.Out)] = srcs
 	}
 
-	for dir, m := range model {
+	for dir, mod := range dm {
 		buildDir := dir
 		if buildDir == "" {
 			buildDir = "."
@@ -1251,9 +1312,6 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			findings = append(findings, finding{dirOrEmpty(dir), "no-build", "no BUILD file for observed compiles"})
 			continue
 		}
-		// all cc_library rules in the dir: a source/header/define is
-		// satisfied when ANY of them declares it (flag-signature variants
-		// split one dir's compiles across several libraries)
 		var libRules []*buildRule
 		for i := range rules {
 			if rules[i].kind == "cc_library" {
@@ -1272,17 +1330,17 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 			return false
 		}
-		for _, src := range m.srcs {
+		for _, src := range mod.srcs {
 			if !anyDeclares(func(r *buildRule) []string { return r.srcs }, src) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-src", src})
 			}
 		}
-		for _, hdr := range m.hdrs {
+		for _, hdr := range mod.hdrs {
 			if !anyDeclares(func(r *buildRule) []string { return r.hdrs }, hdr) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-hdr", hdr})
 			}
 		}
-		for _, dep := range m.deps {
+		for _, dep := range mod.deps {
 			found := false
 			for _, r := range libRules {
 				if hasDepLabel(r.deps, dep) {
@@ -1294,13 +1352,13 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-dep", dep})
 			}
 		}
-		for _, def := range m.defines {
+		for _, def := range mod.defines {
 			if !anyDeclares(func(r *buildRule) []string { return r.defines }, def) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-define", def})
 			}
 		}
 	}
-	// binaries: declared with required deps
+	// binaries: declared with required deps OR srcs (make model)
 	for bin, wantDeps := range binDeps {
 		binDir := ""
 		for _, l := range links {
@@ -1318,7 +1376,7 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 		rules, err := parseBuildFile(filepath.Join(wd, buildDir, "BUILD.bazel"))
 		if err != nil {
-			continue // library findings already cover a missing BUILD
+			continue
 		}
 		var binRule *buildRule
 		for i := range rules {
@@ -1336,12 +1394,14 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				findings = append(findings, finding{dirOrEmpty(binDir), "missing-dep", dep + " (for binary " + bin + ")"})
 			}
 		}
+		for _, src := range binSrcs[bin] {
+			if !contains(binRule.srcs, src) {
+				findings = append(findings, finding{dirOrEmpty(binDir), "missing-src", src + " (for binary " + bin + ")"})
+			}
+		}
 	}
 	return findings
 }
-
-// cmdBazelGenerateCC is the C/C++ entry: dry-run discovery, depfile
-// capture, BUILD generation, then validation.
 func cmdBazelGenerateCC(wd string, validateOnly bool) {
 	// make's $(CURDIR) and os.Getwd can disagree through symlinks
 	// (macOS: /tmp vs /private/tmp) — relativize against the resolved
