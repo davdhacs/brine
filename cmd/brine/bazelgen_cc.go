@@ -310,6 +310,18 @@ func (l *ccLibrary) MatchesLink(link ccLink) bool {
 	return true
 }
 
+func dedup(items []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, x := range items {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 // relLabelPath converts an absolute source path to a BUILD-relative
 // label path (../../foo.c from another dir, or plain foo.c).
 func relLabelPath(wd, p string) string {
@@ -488,27 +500,31 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 		// binaries whose outputs live in this dir
 		for _, l := range binsByDir[dir] {
-			b.WriteString("cc_binary(\n")
-			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
-			var depList, srcList []string
+			var depList []string
 			seen := map[string]bool{}
+			addDep := func(lbl string) {
+				if !seen[lbl] {
+					seen[lbl] = true
+					depList = append(depList, lbl)
+				}
+			}
+			// combined compile+link sources that no same-signature library
+			// owns: collected into a dedicated link-signature library so
+			// they compile with the link's defines AND resolve their
+			// headers from the project (sqlite's shell.c otherwise picks
+			// up /usr/include/sqlite3.h — version mismatch, found via
+			// parity on a Linux worker)
+			linkLibSrcs := map[string][]string{} // dir -> srcs for the link lib
 			for _, o := range l.Objects {
 				if key, ok := objOwner[o]; ok {
 					// an observed .o: dep on the library that compiles it
 					if lib, ok := libs[key]; ok {
-						lbl := ccLabel(lib.Dir, lib.Name)
-						if !seen[lbl] {
-							seen[lbl] = true
-							depList = append(depList, lbl)
-						}
+						addDep(ccLabel(lib.Dir, lib.Name))
 					}
 					continue
 				}
 				if strings.HasSuffix(o, ".c") || strings.HasSuffix(o, ".cc") ||
 					strings.HasSuffix(o, ".cpp") || strings.HasSuffix(o, ".cxx") {
-					// combined compile+link source: if a library compiles
-					// this source with the SAME flag signature, dep on it;
-					// otherwise the binary compiles it itself (srcs)
 					src := relTo(wd, o)
 					base := filepath.Base(src)
 					sdir := filepath.ToSlash(filepath.Dir(src))
@@ -518,30 +534,63 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					matched := false
 					for _, lib := range dirLibs[sdir] {
 						if contains(lib.Srcs, base) && lib.MatchesLink(l) {
-							lbl := ccLabel(lib.Dir, lib.Name)
-							if !seen[lbl] {
-								seen[lbl] = true
-								depList = append(depList, lbl)
-							}
+							addDep(ccLabel(lib.Dir, lib.Name))
 							matched = true
 							break
 						}
 					}
 					if !matched {
-						srcList = append(srcList, relLabelPath(wd, o))
+						linkLibSrcs[sdir] = append(linkLibSrcs[sdir], base)
 					}
 				}
 			}
-			if len(srcList) > 0 {
-				writeSortedStrings(&b, "srcs", srcList)
+			// emit the link-signature library before the binary
+			if len(linkLibSrcs) > 0 {
+				var sdirs []string
+				for d := range linkLibSrcs {
+					sdirs = append(sdirs, d)
+				}
+				sort.Strings(sdirs)
+				for _, sdir := range sdirs {
+					srcs := dedup(linkLibSrcs[sdir])
+					libName := filepath.Base(l.Out) + "_lib"
+					// headers: same-dir headers of the sources, known from
+					// the depfile model of same-dir libraries
+					var hdrs []string
+					for _, lib := range dirLibs[sdir] {
+						hdrs = append(hdrs, lib.Hdrs...)
+					}
+					b.WriteString("cc_library(\n")
+					fmt.Fprintf(&b, "    name = %q,\n", libName)
+					writeSortedStrings(&b, "srcs", srcs)
+					if len(hdrs) > 0 {
+						writeSortedStrings(&b, "hdrs", dedup(hdrs))
+					}
+					if len(l.Defines) > 0 {
+						writeSortedStrings(&b, "defines", l.Defines)
+					}
+					for _, lib := range dirLibs[sdir] {
+						if len(lib.IncDirs) > 0 {
+							writeSortedStrings(&b, "includes", lib.IncDirs)
+							break
+						}
+					}
+					b.WriteString("    visibility = [\"//visibility:public\"],\n")
+					b.WriteString(")\n\n")
+					if sdir == dir {
+						addDep(":" + libName)
+					} else {
+						addDep(ccLabel(sdir, libName))
+					}
+				}
 			}
+			// the binary rule itself — AFTER any link-signature libraries
+			// emitted above (writing it earlier spliced the library into
+			// the middle of the binary rule)
+			b.WriteString("cc_binary(\n")
+			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
 			if len(depList) > 0 {
 				writeSortedStrings(&b, "deps", depList)
-			}
-			// combined compile+link: the binary compiles its own srcs and
-			// needs the observed defines to compile them the same way
-			if len(srcList) > 0 && len(l.Defines) > 0 {
-				writeSortedStrings(&b, "defines", l.Defines)
 			}
 			// system libraries the observed link used (-lreadline -lz ...):
 			// without them the link fails on undefined references
