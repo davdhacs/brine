@@ -758,8 +758,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// twice with different defines (sqlite compiles its amalgamation for
 	// both the library and the shell) cannot live in one cc_library —
 	// different flag sets get different targets.
-	libs := map[string]*ccLibrary{}   // key: dir + "|" + flag signature
-	objOwner := map[string][]string{} // obj path -> lib keys (a path can be
+	libs := map[string]*ccLibrary{}      // key: dir + "|" + flag signature
+	objCompile := map[string]ccCompile{} // obj path -> its compile (src, defines)
+	objOwner := map[string][]string{}    // obj path -> lib keys (a path can be
 	// compiled by several flag variants — automake reuses object names
 	// across targets; curl's unittest build overwrites curl-tool_main.o
 	// with a main()-less compile, found via nm on a Linux worker)
@@ -782,6 +783,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				c.Src, c.Obj, key, len(c.Headers))
 		}
 		objOwner[c.Obj] = append(objOwner[c.Obj], key)
+		objCompile[c.Obj] = c
 		for _, h := range c.Headers {
 			hdir := filepath.ToSlash(filepath.Dir(h))
 			if hdir == "." {
@@ -1005,7 +1007,8 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 		// binaries whose outputs live in this dir
 		for _, l := range binsByDir[dir] {
-			var depList []string
+			var depList, srcList []string
+			var srcDefines []string
 			seen := map[string]bool{}
 			addDep := func(lbl string) {
 				if !seen[lbl] {
@@ -1013,153 +1016,62 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					depList = append(depList, lbl)
 				}
 			}
-			// project library inputs (.la/.a): a .la bundles every variant
-			// its own link consumed (libcurl.la carries lib, curlx, vauth,
-			// vtls objects) — dep all of them, not just the dominant one;
-			// appended AFTER object deps (--start-lib groups need
-			// consumers first)
-			var libRefDeps []string
-			for _, ref := range l.LibRefs {
-				// a .la deps every variant its producing link consumed,
-				// in link order (dominant first): the dominant has
-				// alwayslink so its members fully link and its references
-				// pull later specialty groups; specialties' back-refs to
-				// the dominant resolve against already-linked members
-				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
-				if producers, ok := laVariants[refPath]; ok {
-					for _, key := range producers {
-						if lib, ok := libs[key]; ok {
-							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
-						}
-					}
-					continue
-				}
-				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
-				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
-					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
-				}
-			}
-			// combined compile+link sources that no same-signature library
-			// owns: collected into a dedicated link-signature library so
-			// they compile with the link's defines AND resolve their
-			// headers from the project (sqlite's shell.c otherwise picks
-			// up /usr/include/sqlite3.h — version mismatch, found via
-			// parity on a Linux worker)
-			linkLibSrcs := map[string][]string{} // dir -> srcs for the link lib
+			// THE MAKE MODEL: the binary compiles exactly the sources its
+			// link consumed, with those compiles' defines (the observed
+			// link line IS the ground truth for what the binary needs).
+			// Library deps come only from .la/.a refs — dep-variant
+			// selection for individual objects cannot reproduce archive
+			// semantics under --start-lib (bidirectional refs, duplicate
+			// symbols across flag variants), but one dominant .la variant
+			// resolves everything internally (intra-group iteration).
 			for _, o := range l.Objects {
-				if keys, ok := objOwner[o]; ok && len(keys) > 0 {
-					// an observed .o: dep EVERY variant that compiles the
-					// path — multi-owner paths (automake reuses object
-					// names across flag targets; curl's unittest
-					// tool_main.o lacks main(), the tool build's has it)
-					// cannot be disambiguated by dominance alone, and
-					// --start-lib groups make extra variants safe: members
-					// pull only when they resolve an undefined symbol
-					for _, k := range keys {
-						if lib, ok := libs[k]; ok {
-							addDep(ccLabel(lib.Dir, lib.Name))
-						}
-					}
-					continue
-				}
-				// unowned object: automake places some objects under paths
-				// that differ from the compile's -o form (src/Makefile
-				// builds curlx objects into ../lib/curlx/ while naming
-				// them curl-timeval.o) — match by basename when unique
-				if strings.HasSuffix(o, ".o") || strings.HasSuffix(o, ".lo") {
-					base := filepath.Base(o)
-					var match string
-					ambiguous := false
-					for k := range objOwner {
-						if filepath.Base(k) == base {
-							if match != "" {
-								ambiguous = true
-								break
-							}
-							match = k
-						}
-					}
-					if !ambiguous && match != "" {
-						if lib, ok := libs[objOwner[match][0]]; ok {
-							addDep(ccLabel(lib.Dir, lib.Name))
-						}
-						continue
-					}
-				}
-				if strings.HasSuffix(o, ".c") || strings.HasSuffix(o, ".cc") ||
-					strings.HasSuffix(o, ".cpp") || strings.HasSuffix(o, ".cxx") {
-					src := relTo(wd, o)
-					base := filepath.Base(src)
+				if c, ok := objCompile[o]; ok {
+					src := relTo(wd, joinCtx(c.CtxDir, c.Src))
 					sdir := filepath.ToSlash(filepath.Dir(src))
 					if sdir == "." {
 						sdir = ""
 					}
-					matched := false
-					for _, lib := range dirLibs[sdir] {
-						if contains(lib.Srcs, base) && lib.MatchesLink(l) {
-							addDep(ccLabel(lib.Dir, lib.Name))
-							matched = true
-							break
+					if sdir != dir {
+						if _, isPkg := dirLibs[sdir]; isPkg {
+							// cross-package source: dep the variant that
+							// compiled THIS object (--start-lib: the first
+							// group providing a symbol wins; later groups'
+							// duplicates never pull)
+							if keys, ok := objOwner[o]; ok && len(keys) > 0 {
+								if lib, ok := libs[keys[0]]; ok {
+									addDep(ccLabel(lib.Dir, lib.Name))
+								}
+							}
+							continue
 						}
 					}
-					if !matched {
-						linkLibSrcs[sdir] = append(linkLibSrcs[sdir], base)
+					if !contains(srcList, src) {
+						srcList = append(srcList, src)
+					}
+					for _, d := range c.Defines {
+						if !contains(srcDefines, d) {
+							srcDefines = append(srcDefines, d)
+						}
+					}
+					continue
+				}
+				if strings.HasSuffix(o, ".c") || strings.HasSuffix(o, ".cc") ||
+					strings.HasSuffix(o, ".cpp") || strings.HasSuffix(o, ".cxx") {
+					src := relTo(wd, o)
+					if !contains(srcList, src) {
+						srcList = append(srcList, src)
 					}
 				}
+				// .lo/.o without a compile: covered by the .la dep below
 			}
-			for _, d := range libRefDeps {
-				addDep(d)
-			}
-			// emit the link-signature library before the binary
-			if len(linkLibSrcs) > 0 {
-				var sdirs []string
-				for d := range linkLibSrcs {
-					sdirs = append(sdirs, d)
-				}
-				sort.Strings(sdirs)
-				for _, sdir := range sdirs {
-					srcs := dedup(linkLibSrcs[sdir])
-					libName := filepath.Base(l.Out) + "_lib"
-					// headers: same-dir headers of the sources, known from
-					// the depfile model of same-dir libraries and from the
-					// link-source depfile capture (shell.c's sqlite3.h)
-					var hdrs []string
-					for _, lib := range dirLibs[sdir] {
-						hdrs = append(hdrs, lib.Hdrs...)
-					}
-					for _, src := range srcs {
-						for _, h := range l.SrcHeaders[src] {
-							hdir := filepath.ToSlash(filepath.Dir(h))
-							if hdir == "." {
-								hdir = ""
-							}
-							if hdir == sdir {
-								hdrs = append(hdrs, filepath.Base(h))
-							}
-						}
-					}
-					b.WriteString("cc_library(\n")
-					fmt.Fprintf(&b, "    name = %q,\n", libName)
-					writeSortedStrings(&b, "srcs", srcs)
-					if len(hdrs) > 0 {
-						writeSortedStrings(&b, "hdrs", dedup(hdrs))
-					}
-					if len(l.Defines) > 0 {
-						writeSortedStrings(&b, "defines", l.Defines)
-					}
-					for _, lib := range dirLibs[sdir] {
-						if len(lib.IncDirs) > 0 {
-							writeSortedStrings(&b, "includes", lib.IncDirs)
-							break
-						}
-					}
-					b.WriteString("    visibility = [\"//visibility:public\"],\n")
-					b.WriteString(")\n\n")
-					if sdir == dir {
-						addDep(":" + libName)
-					} else {
-						addDep(ccLabel(sdir, libName))
-					}
+			// project library inputs (.la/.a): dominant variant of the
+			// owning package — one group whose intra-group archive
+			// iteration resolves the package's internal cross-references
+			for _, ref := range l.LibRefs {
+				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
+				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
+					addDep(ccLabel(rdir, primary.Name))
 				}
 			}
 			// the binary rule itself — AFTER any link-signature libraries
@@ -1171,6 +1083,12 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				for _, d := range depList {
 					fmt.Fprintf(os.Stderr, "[cc-debug] binary %s dep %s\n", filepath.Base(l.Out), d)
 				}
+			}
+			if len(srcList) > 0 {
+				writeSortedStrings(&b, "srcs", srcList)
+			}
+			if len(srcList) > 0 && len(srcDefines) > 0 {
+				writeSortedStrings(&b, "defines", srcDefines)
 			}
 			if len(depList) > 0 {
 				writeOrderedStrings(&b, "deps", depList)
