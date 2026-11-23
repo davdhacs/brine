@@ -643,7 +643,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			m.ImageOutputs = append(m.ImageOutputs, store.ImageRef{ImageID: id, Tag: tag})
 		}
 	} else {
-		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt)
+		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns)
 		if err != nil {
 			fatal("snapshot: %v", err)
 		}
@@ -1443,7 +1443,7 @@ func cmdRecord(args []string) {
 			}
 		}
 	} else {
-		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt)
+		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns)
 		if err != nil {
 			fatal("snapshot: %v", err)
 		}

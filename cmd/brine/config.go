@@ -51,6 +51,13 @@ type Config struct {
 	// from the command automatically. Env override: BRINE_KEY_IMAGES
 	KeyImages []string `json:"key_images,omitempty"`
 
+	// OutputPatterns: scope the receipt snapshot to deliverables
+	// (substring or glob, same semantics as `brine restore`).
+	// The collector: 898 artifacts / 1.6GB → 2 binaries / 85MB.
+	// Default (unset): snapshot every output — full incremental-
+	// rebuild state. Env override: BRINE_OUTPUT_PATTERNS
+	OutputPatterns []string `json:"output_patterns,omitempty"`
+
 	// BuildVCS: "off" disables VCS key-folding (promise that stamping
 	// is disabled in your build). Default "key-fold".
 	BuildVCS string `json:"buildvcs,omitempty"`
@@ -116,6 +123,9 @@ func loadConfig(wd string) Config {
 	}
 	if v := os.Getenv("BRINE_KEY_IMAGES"); v != "" {
 		c.KeyImages = splitTrim(v)
+	}
+	if v := os.Getenv("BRINE_OUTPUT_PATTERNS"); v != "" {
+		c.OutputPatterns = splitTrim(v)
 	}
 	if v := os.Getenv("BRINE_WRITES"); v == "0" {
 		f := false

@@ -68,6 +68,7 @@ type Manifest struct {
 	KeyKind      string            `json:"key_kind,omitempty"` // "content" (default) | "commit"
 	ClosureHash  string            `json:"closure_hash,omitempty"`
 	KeyTail      string            `json:"key_tail,omitempty"`
+	OutputPatterns []string        `json:"output_patterns,omitempty"` // snapshot scope; nil = all outputs
 }
 
 // Store is the content-addressed blob store with manifests.
@@ -261,25 +262,35 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 	return count, total, nil
 }
 
+// matchAnyPattern applies the shared pattern semantics: filepath.Match
+// (glob) when the pattern contains glob characters (* ? [), substring
+// match otherwise — matching against both the relative path and its
+// base name.
+func matchAnyPattern(patterns []string, rel string) bool {
+	for _, p := range patterns {
+		if strings.ContainsAny(p, "*?[") {
+			if ok, _ := filepath.Match(p, rel); ok {
+				return true
+			}
+			if ok, _ := filepath.Match(p, filepath.Base(rel)); ok {
+				return true
+			}
+		} else if strings.Contains(rel, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // RestoreManifestMatching restores only blobs whose manifest-relative
 // path matches the pattern: filepath.Match (glob) when the pattern
 // contains glob characters (* ? [), substring match otherwise —
 // `brine restore <key> collector` fetches every output with
 // "collector" in its path without remembering the full layout.
 func (s *Store) RestoreManifestMatching(m *Manifest, dir, pattern string) (int, int64, error) {
-	hasGlob := strings.ContainsAny(pattern, "*?[")
 	sub := &Manifest{Key: m.Key, BuiltAt: m.BuiltAt}
 	for _, ref := range m.Blobs {
-		match := false
-		if hasGlob {
-			match, _ = filepath.Match(pattern, ref.Path)
-			if !match {
-				match, _ = filepath.Match(pattern, filepath.Base(ref.Path))
-			}
-		} else {
-			match = strings.Contains(ref.Path, pattern)
-		}
-		if match {
+		if matchAnyPattern([]string{pattern}, ref.Path) {
 			sub.Blobs = append(sub.Blobs, ref)
 		}
 	}

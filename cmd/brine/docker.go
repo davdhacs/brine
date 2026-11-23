@@ -376,6 +376,14 @@ func keyTail(wd string, args []string) string {
 		}
 	}
 
+	// Output scope is part of the receipt's identity: same inputs with
+	// different output_patterns produce different manifests — without
+	// this they collide under one key and the divergence detector
+	// reports a false positive.
+	if len(cfg.OutputPatterns) > 0 {
+		parts = append(parts, "outscope:"+strings.Join(cfg.OutputPatterns, "\x00"))
+	}
+
 	// Untracked-config patterns are NOT keyed here: a config the build
 	// GENERATES is an output (keying it conflicts — the stale-serve
 	// found in the generated-config case); a config written OUTSIDE

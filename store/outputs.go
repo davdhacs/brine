@@ -18,15 +18,22 @@ import (
 // This is the correctness-critical distinction from SnapshotDir (which
 // captured the whole tree and, on a warm hit, overwrote non-input
 // edits — see docs/sensors.md "Correctness rules").
-func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64) (*Manifest, error) {
+//
+// outputPatterns scopes the snapshot to deliverables when set (the
+// collector: 898 build artifacts → 2 binaries; 1.6GB → 85MB shared).
+// Semantics match restore: substring on the relative path, or
+// filepath.Match glob when the pattern contains * ? [. The default
+// (nil) keeps every output — full incremental-rebuild state.
+func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64, outputPatterns []string) (*Manifest, error) {
 	inputs := make(map[string]bool, len(readSet))
 	for _, f := range readSet {
 		inputs[filepath.ToSlash(f)] = true
 	}
 
 	m := &Manifest{
-		Key:     key,
-		Created: time.Now(),
+		Key:           key,
+		Created:       time.Now(),
+		OutputPatterns: outputPatterns,
 	}
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -71,6 +78,15 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 		}
 		// Rule (b): only files the build touched.
 		if info.ModTime().UnixNano() <= builtAt {
+			return nil
+		}
+		// Scoped snapshot: only deliverables matching the patterns.
+		// Filter BEFORE PutBlob — intermediates are never hashed,
+		// stored locally, or uploaded. Exact path or glob (NOT
+		// substring: "build/app" must not pull in build/app.o —
+		// scope declarations are precise; substring stays a
+		// restore-time convenience).
+		if len(outputPatterns) > 0 && !matchOutputScope(outputPatterns, rel) {
 			return nil
 		}
 
@@ -128,6 +144,26 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 
 	sort.Slice(m.Blobs, func(i, j int) bool { return m.Blobs[i].Path < m.Blobs[j].Path })
 	return m, nil
+}
+
+// matchOutputScope matches a snapshot-scope pattern: exact relative
+// path, or filepath.Match glob when the pattern contains * ? [.
+// Precise by design — a scope declaration of "build/app" must not
+// capture build/app.o.
+func matchOutputScope(patterns []string, rel string) bool {
+	for _, p := range patterns {
+		if strings.ContainsAny(p, "*?[") {
+			if ok, _ := filepath.Match(p, rel); ok {
+				return true
+			}
+			if ok, _ := filepath.Match(p, filepath.Base(rel)); ok {
+				return true
+			}
+		} else if rel == p {
+			return true
+		}
+	}
+	return false
 }
 
 // OutputHashes returns path → content hash for every output blob in a
