@@ -512,8 +512,12 @@ func isCSource(p string) bool {
 
 // ccLibrary is a generated cc_library: one per source directory.
 type ccLibrary struct {
-	Dir     string
-	Name    string
+	Dir        string
+	Name       string
+	AlwaysLink bool // dominant variant of multi-variant packages: link all
+	// members unconditionally — bidirectional symbol references between
+	// flag variants (lib's http.c <-> vauth's Curl_auth_*) cannot resolve
+	// through --start-lib groups because gold does not re-iterate them
 	Srcs    []string
 	Hdrs    []string // same-dir headers
 	ExtHdrs []string // cross-dir project headers (dep edges)
@@ -877,6 +881,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 	}
+	// dominant variants of multi-variant packages link all members
+	// (alwayslink): cross-variant symbol references flow both ways in
+	// real libraries (curl: lib's digest code calls vauth's
+	// Curl_auth_*, vauth's digest calls lib's Curl_sha512_256it) and
+	// --start-lib groups do not re-iterate in gold
+	for _, ls := range dirLibs {
+		if len(ls) > 1 {
+			ls[0].AlwaysLink = true // dominant (sorted first)
+		}
+	}
+
 	// within a package, every flag-variant lib declares the union of the
 	// package's headers: a variant's compile may read a header another
 	// variant declared (sandbox inputs are per-rule), and dependents
@@ -956,6 +971,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		for _, lib := range dirLibs[dir] {
 			b.WriteString("cc_library(\n")
 			fmt.Fprintf(&b, "    name = %q,\n", lib.Name)
+			if lib.AlwaysLink {
+				b.WriteString("    alwayslink = 1,\n")
+			}
 			writeSortedStrings(&b, "srcs", lib.Srcs)
 			if len(lib.Hdrs) > 0 {
 				writeSortedStrings(&b, "hdrs", lib.Hdrs)
@@ -1002,17 +1020,20 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// consumers first)
 			var libRefDeps []string
 			for _, ref := range l.LibRefs {
-				// a .la/.a deps the DOMINANT variant of the owning package.
-				// The dominant build carries the package's full object set
-				// (merge unites same-signature variants; dominant = most
-				// sources = the real build — for curl's libcurl.la this
-				// is the 128-object variant with lib+vauth+vtls+curlx).
-				// Multi-variant dep lists pollute --start-lib group
-				// ordering: gold does not re-iterate groups, so a
-				// reference from a later group to an earlier group's
-				// member never pulls it (Curl_sha512_256it, found via
-				// manual @params link).
+				// a .la deps every variant its producing link consumed,
+				// in link order (dominant first): the dominant has
+				// alwayslink so its members fully link and its references
+				// pull later specialty groups; specialties' back-refs to
+				// the dominant resolve against already-linked members
 				refPath := relTo(wd, joinCtx(l.CtxDir, ref))
+				if producers, ok := laVariants[refPath]; ok {
+					for _, key := range producers {
+						if lib, ok := libs[key]; ok {
+							libRefDeps = append(libRefDeps, ccLabel(lib.Dir, lib.Name))
+						}
+					}
+					continue
+				}
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
 				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
 					libRefDeps = append(libRefDeps, ccLabel(rdir, primary.Name))
