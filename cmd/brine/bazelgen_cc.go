@@ -930,28 +930,6 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		laVariants[l.Out] = keys
 	}
 
-	// laVariants: each .la output -> the lib keys of the objects its
-	// producing link consumed, in link order — a .la bundles every
-	// signature variant that fed it (libcurl.la carries lib, curlx,
-	// vauth, vtls objects), and dependents need them all
-	laVariants := map[string][]string{}
-	for _, l := range links {
-		if !strings.HasSuffix(l.Out, ".la") {
-			continue
-		}
-		var keys []string
-		seen := map[string]bool{}
-		for _, o := range l.Objects {
-			for _, k := range objOwner[o] {
-				if !seen[k] {
-					seen[k] = true
-					keys = append(keys, k)
-				}
-			}
-		}
-		laVariants[l.Out] = keys
-	}
-
 	// one BUILD file per dir: libraries + binaries composed, single write
 	allDirs := map[string]bool{}
 	for dir := range dirLibs {
