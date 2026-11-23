@@ -49,7 +49,8 @@ type ccCompile struct {
 type ccLink struct {
 	Cmd     []string
 	Out     string   // binary or archive
-	Objects []string // .o files consumed
+	Objects []string // .o files consumed, or .c/.cc sources (combined compile+link)
+	Defines []string // observed on combined compile+link commands
 	IsAr    bool
 }
 
@@ -188,6 +189,7 @@ func classifyLink(f []string) *ccLink {
 	}
 	var out string
 	var objs []string
+	var defines []string
 	for i := 1; i < len(f); i++ {
 		if f[i] == "-o" && i+1 < len(f) {
 			if i+2 <= len(f) {
@@ -198,12 +200,20 @@ func classifyLink(f []string) *ccLink {
 		}
 		if strings.HasSuffix(f[i], ".o") {
 			objs = append(objs, f[i])
+		} else if strings.HasSuffix(f[i], ".c") || strings.HasSuffix(f[i], ".cc") ||
+			strings.HasSuffix(f[i], ".cpp") || strings.HasSuffix(f[i], ".cxx") {
+			// combined compile+link (sqlite's shell: "cc -o sqlite3
+			// shell.c sqlite3.c ... -lreadline") — sources compile straight
+			// into the binary
+			objs = append(objs, f[i])
+		} else if strings.HasPrefix(f[i], "-D") {
+			defines = append(defines, strings.TrimPrefix(f[i], "-D"))
 		}
 	}
 	if out == "" || len(objs) == 0 || strings.HasSuffix(out, ".o") {
 		return nil // a compile, not a link
 	}
-	return &ccLink{Cmd: f, Out: out, Objects: objs}
+	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines}
 }
 
 // captureDepfiles re-runs each compile with -MD -MF to a temp depfile
@@ -275,6 +285,25 @@ type ccLibrary struct {
 	ExtHdrs []string // cross-dir project headers (dep edges)
 	Defines []string
 	IncDirs []string
+}
+
+// MatchesLink reports whether a combined compile+link command's defines
+// are all provided by this library — the link's sources compile the same
+// way through the library as they would inline.
+func (l *ccLibrary) MatchesLink(link ccLink) bool {
+	for _, d := range link.Defines {
+		if !contains(l.Defines, d) {
+			return false
+		}
+	}
+	return true
+}
+
+// relLabelPath converts an absolute source path to a BUILD-relative
+// label path (../../foo.c from another dir, or plain foo.c).
+func relLabelPath(wd, p string) string {
+	rel := relTo(wd, p)
+	return rel
 }
 
 // flagSignature identifies a compile's flag set: sorted defines+includes.
@@ -450,20 +479,50 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		for _, l := range binsByDir[dir] {
 			b.WriteString("cc_binary(\n")
 			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
-			var depList []string
+			var depList, srcList []string
 			seen := map[string]bool{}
 			for _, o := range l.Objects {
-				key, ok := objOwner[o]
-				if !ok {
-					continue // object from an unobserved compile (prebuilt?)
+				if key, ok := objOwner[o]; ok {
+					// an observed .o: dep on the library that compiles it
+					if lib, ok := libs[key]; ok {
+						lbl := ccLabel(lib.Dir, lib.Name)
+						if !seen[lbl] {
+							seen[lbl] = true
+							depList = append(depList, lbl)
+						}
+					}
+					continue
 				}
-				if lib, ok := libs[key]; ok {
-					lbl := ccLabel(lib.Dir, lib.Name)
-					if !seen[lbl] {
-						seen[lbl] = true
-						depList = append(depList, lbl)
+				if strings.HasSuffix(o, ".c") || strings.HasSuffix(o, ".cc") ||
+					strings.HasSuffix(o, ".cpp") || strings.HasSuffix(o, ".cxx") {
+					// combined compile+link source: if a library compiles
+					// this source with the SAME flag signature, dep on it;
+					// otherwise the binary compiles it itself (srcs)
+					src := relTo(wd, o)
+					base := filepath.Base(src)
+					sdir := filepath.ToSlash(filepath.Dir(src))
+					if sdir == "." {
+						sdir = ""
+					}
+					matched := false
+					for _, lib := range dirLibs[sdir] {
+						if contains(lib.Srcs, base) && lib.MatchesLink(l) {
+							lbl := ccLabel(lib.Dir, lib.Name)
+							if !seen[lbl] {
+								seen[lbl] = true
+								depList = append(depList, lbl)
+							}
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						srcList = append(srcList, relLabelPath(wd, o))
 					}
 				}
+			}
+			if len(srcList) > 0 {
+				writeSortedStrings(&b, "srcs", srcList)
 			}
 			writeSortedStrings(&b, "deps", depList)
 			b.WriteString(")\n\n")
@@ -568,8 +627,8 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// binary deps from links
 	binDeps := map[string][]string{} // binary name -> required lib labels
 	for _, l := range links {
-		if l.IsAr {
-			continue
+		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") {
+			continue // same skip as generation: shared libs are covered by cc_library
 		}
 		var deps []string
 		for _, o := range l.Objects {
