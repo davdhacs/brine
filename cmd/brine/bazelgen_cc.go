@@ -774,8 +774,8 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			lib.Srcs = append(lib.Srcs, filepath.Base(c.Src))
 		}
 		if debug {
-			fmt.Fprintf(os.Stderr, "[cc-debug] %s -> %s | hdrs=%d sig=%s\n",
-				c.Src, key, len(c.Headers), flagSignature(c))
+			fmt.Fprintf(os.Stderr, "[cc-debug] %s obj=%s -> %s | hdrs=%d\n",
+				c.Src, c.Obj, key, len(c.Headers))
 		}
 		objOwner[c.Obj] = append(objOwner[c.Obj], key)
 		for _, h := range c.Headers {
