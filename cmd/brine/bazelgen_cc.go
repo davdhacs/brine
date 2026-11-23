@@ -943,6 +943,17 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		dirLibs[hdir] = append(dirLibs[hdir], &ccLibrary{Dir: hdir, Name: ccLibName(hdir), Hdrs: dedup(rel)})
 	}
 
+	// dominant variants of multi-variant packages alwayslink: gold does
+	// not re-iterate --start-lib groups, so the dominant's full member
+	// set links unconditionally; other variants never pull (dominant
+	// covers their symbols) — no duplicates. Selected by srcs count,
+	// not list position (merges append, invalidating order assumptions).
+	for dir := range dirLibs {
+		if p := primaryLibForDir(dirLibs, dir); p != nil {
+			p.AlwaysLink = true
+		}
+	}
+
 	// headers referenced by OTHER packages' compiles but read by no
 	// compile of this package (curl: curlx/curlx.h is included only by
 	// src/tool_setup.h — no lib/ depfile ever lists it, so no rule
@@ -977,28 +988,6 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 	}
-	// dominant variants of multi-variant packages link all members
-	// (alwayslink): cross-variant symbol references flow both ways in
-	// real libraries (curl: lib's digest code calls vauth's
-	// Curl_auth_*, vauth's digest calls lib's Curl_sha512_256it) and
-	// --start-lib groups do not re-iterate in gold
-	for _, ls := range dirLibs {
-		if len(ls) > 1 {
-			ls[0].AlwaysLink = true // dominant (sorted first)
-		}
-	}
-
-	// dominant variants of multi-variant packages alwayslink: gold does
-	// not re-iterate --start-lib groups (intra-group archive semantics do
-	// not hold), so the dominant's full member set links unconditionally;
-	// other variants never pull (dominant covers their symbols) — no
-	// duplicates
-	for _, ls := range dirLibs {
-		if len(ls) > 1 {
-			ls[0].AlwaysLink = true // dominant (sorted first)
-		}
-	}
-
 	// within a package, every flag-variant lib declares the union of the
 	// package's headers: a variant's compile may read a header another
 	// variant declared (sandbox inputs are per-rule), and dependents
