@@ -754,8 +754,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// twice with different defines (sqlite compiles its amalgamation for
 	// both the library and the shell) cannot live in one cc_library —
 	// different flag sets get different targets.
-	libs := map[string]*ccLibrary{} // key: dir + "|" + flag signature
-	objOwner := map[string]string{} // obj path -> lib key
+	libs := map[string]*ccLibrary{}   // key: dir + "|" + flag signature
+	objOwner := map[string][]string{} // obj path -> lib keys (a path can be
+	// compiled by several flag variants — automake reuses object names
+	// across targets; curl's unittest build overwrites curl-tool_main.o
+	// with a main()-less compile, found via nm on a Linux worker)
 	for _, c := range compiles {
 		dir := filepath.ToSlash(filepath.Dir(c.Src))
 		if dir == "." {
@@ -774,7 +777,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			fmt.Fprintf(os.Stderr, "[cc-debug] %s -> %s | hdrs=%d sig=%s\n",
 				c.Src, key, len(c.Headers), flagSignature(c))
 		}
-		objOwner[c.Obj] = key
+		objOwner[c.Obj] = append(objOwner[c.Obj], key)
 		for _, h := range c.Headers {
 			hdir := filepath.ToSlash(filepath.Dir(h))
 			if hdir == "." {
@@ -971,9 +974,20 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// parity on a Linux worker)
 			linkLibSrcs := map[string][]string{} // dir -> srcs for the link lib
 			for _, o := range l.Objects {
-				if key, ok := objOwner[o]; ok {
-					// an observed .o: dep on the library that compiles it
-					if lib, ok := libs[key]; ok {
+				if keys, ok := objOwner[o]; ok && len(keys) > 0 {
+					// an observed .o: dep on the library that compiles it;
+					// multi-owner objects (flag variants sharing the path)
+					// dep the dominant build — the variant with the most
+					// sources is the real build, the others are test or
+					// specialty targets (curl's unittest tool_main has no
+					// main(); the tool build's does)
+					best := keys[0]
+					for _, k := range keys[1:] {
+						if len(libs[k].Srcs) > len(libs[best].Srcs) {
+							best = k
+						}
+					}
+					if lib, ok := libs[best]; ok {
 						addDep(ccLabel(lib.Dir, lib.Name))
 					}
 					continue
@@ -996,7 +1010,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 						}
 					}
 					if !ambiguous && match != "" {
-						if lib, ok := libs[objOwner[match]]; ok {
+						if lib, ok := libs[objOwner[match][0]]; ok {
 							addDep(ccLabel(lib.Dir, lib.Name))
 						}
 						continue
