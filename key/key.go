@@ -78,6 +78,10 @@ func Compute(dir string, exclude []string) (string, error) {
 // This is used when the caller knows exactly which files are inputs
 // (e.g., git-tracked source files, excluding build outputs).
 func FromFiles(dir string, files []string, cmd string) string {
+	if os.Getenv("BRINE_DEBUG") != "" {
+		// exact key inputs — the divergence-hunting ground truth
+		fmt.Fprintf(os.Stderr, "[dbg] FromFiles: %d files, cmd=%q\n", len(files), cmd)
+	}
 	h := sha256.New()
 	sort.Strings(files)
 	for _, f := range files {

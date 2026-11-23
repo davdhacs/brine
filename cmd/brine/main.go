@@ -722,9 +722,17 @@ func cmdMemoize(args []string, forceFull bool) {
 		}
 	}
 	reportKey(k)
-	if err := st.PutManifest(m); err != nil {
+	// Guard against output-losing overwrites: a no-op rebuild (command
+	// re-ran with everything up to date) snapshots ZERO outputs and
+	// would replace the real receipt — every later hit then restores
+	// nothing. The richer receipt always wins.
+	if prev, err := st.GetManifest(k); err == nil && prev != nil && len(prev.Blobs) > len(m.Blobs) {
+		fmt.Printf("[brine] store: keeping richer receipt for %s (%d outputs > %d — no-op rebuild would drop outputs)\n",
+			k, len(prev.Blobs), len(m.Blobs))
+	} else if err := st.PutManifest(m); err != nil {
 		fatal("manifest store: %v", err)
 	}
+
 	// Commit receipt: same manifest under the git-HEAD key (blobs are
 	// content-addressed — zero extra storage; just a second index).
 	if !isDocker {
