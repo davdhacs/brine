@@ -260,8 +260,11 @@ func splitCommand(line string) []string {
 	for _, r := range line {
 		switch {
 		case r == '"' && prev == '\\':
-			// escaped quote inside a value: emit as literal quote (the
-			// compiler's preprocessor needs the quote, not the backslash)
+			// escaped quote: the backslash was already written by the
+			// default case; overwrite it with the literal quote
+			s := cur.String()
+			cur.Reset()
+			cur.WriteString(s[:len(s)-1])
 			cur.WriteRune(r)
 		case r == '"':
 			inQuote = !inQuote
