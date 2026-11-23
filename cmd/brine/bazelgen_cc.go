@@ -1052,7 +1052,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// resolves everything internally (intra-group iteration).
 			for _, o := range l.Objects {
 				if c, ok := objCompile[o]; ok {
-					src := relTo(wd, joinCtx(c.CtxDir, c.Src))
+					src := c.Src // already project-relative (relativized at classify)
 					sdir := filepath.ToSlash(filepath.Dir(src))
 					if sdir == "." {
 						sdir = ""
