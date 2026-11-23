@@ -179,6 +179,19 @@ func relTo(wd, p string) string {
 	return filepath.ToSlash(rel)
 }
 
+// cleanAutomakeSource strips automake's VPATH shell-quoting from a
+// source argument: `test -f 'altsvc.c' || echo './'`altsvc.c → altsvc.c
+// (exec'ing the capture command has no shell to evaluate the backticks).
+func cleanAutomakeSource(arg string) string {
+	if !strings.Contains(arg, "`") {
+		return arg
+	}
+	if idx := strings.LastIndex(arg, "`"); idx >= 0 && idx+1 < len(arg) {
+		return arg[idx+1:]
+	}
+	return arg
+}
+
 // splitCommand splits a command line, honoring double quotes.
 func splitCommand(line string) []string {
 	var fields []string
@@ -232,7 +245,12 @@ func classifyCompile(f []string) *ccCompile {
 			incs = append(incs, strings.TrimPrefix(f[i], "-I"))
 		case strings.HasSuffix(f[i], ".c"), strings.HasSuffix(f[i], ".cc"),
 			strings.HasSuffix(f[i], ".cpp"), strings.HasSuffix(f[i], ".cxx"):
-			src = f[i]
+			src = cleanAutomakeSource(f[i])
+			// rewrite the argv so depfile capture re-runs without the
+			// shell fragment (exec has no shell to evaluate backticks)
+			if src != f[i] {
+				f[i] = src
+			}
 		}
 	}
 	if src == "" || obj == "" || !hasC {
