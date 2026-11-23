@@ -97,6 +97,59 @@ func parseWithBases(data []byte, projectRoot, depDir string) []string {
 	return deps
 }
 
+// ParseCtx parses a .d file whose relative paths are relative to ctxDir
+// (a make recursion context — subdir makes emit "curlx/base64.h" meaning
+// lib/curlx/base64.h, or "../lib/curlx/base64.h" from a sibling context)
+// and returns them relative to projectRoot. Parse's [depDir, projectRoot]
+// base search rejects ..-prefixed resolutions even when they land inside
+// the project via the context (curl's tool build: hdrs=0, found via
+// BRINE_CC_DEBUG on a Linux worker).
+func ParseCtx(depFile, projectRoot, ctxDir string) []string {
+	if ctxDir == "" || ctxDir == projectRoot {
+		return Parse(depFile, projectRoot)
+	}
+	data, err := os.ReadFile(depFile)
+	if err != nil {
+		return nil
+	}
+	text := strings.ReplaceAll(string(data), "\\\n", " ")
+
+	var deps []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			continue
+		}
+		for _, dep := range strings.Fields(line[colonIdx+1:]) {
+			if dep == "" {
+				continue
+			}
+			abs := dep
+			if !filepath.IsAbs(dep) {
+				abs = filepath.Clean(filepath.Join(ctxDir, dep))
+			}
+			if _, err := os.Stat(abs); err != nil {
+				continue
+			}
+			rel, err := filepath.Rel(projectRoot, abs)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			rel = filepath.ToSlash(rel)
+			if !seen[rel] {
+				seen[rel] = true
+				deps = append(deps, rel)
+			}
+		}
+	}
+	return deps
+}
+
 // Find scans a directory tree for .d files and returns their paths.
 // Respects common build directories and skips vendor/node_modules.
 func Find(root string) []string {
