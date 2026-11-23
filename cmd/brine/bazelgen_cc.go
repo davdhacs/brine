@@ -250,13 +250,16 @@ func cleanAutomakeSource(arg string) string {
 }
 
 // splitCommand splits a command line, honoring double quotes.
+// Backslash-escaped quotes inside values (cmake's -DVAR="\"a\"" style)
+// don't toggle the quote state; they're part of the value.
 func splitCommand(line string) []string {
 	var fields []string
 	var cur strings.Builder
 	inQuote := false
+	prev := rune(0)
 	for _, r := range line {
 		switch {
-		case r == '"':
+		case r == '"' && prev != '\\':
 			inQuote = !inQuote
 		case (r == ' ' || r == '\t') && !inQuote:
 			if cur.Len() > 0 {
@@ -266,6 +269,7 @@ func splitCommand(line string) []string {
 		default:
 			cur.WriteRune(r)
 		}
+		prev = r
 	}
 	if cur.Len() > 0 {
 		fields = append(fields, cur.String())
