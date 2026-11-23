@@ -56,6 +56,7 @@ type ccLink struct {
 	IncDirs    []string            // -I flags observed on the link line
 	SrcHeaders map[string][]string // per-source headers (depfile-captured)
 	CtxDir     string              // absolute make-recursion context
+	LibRefs    []string            // .la/.a library inputs (project libraries, not objects)
 	IsAr       bool
 }
 
@@ -345,7 +346,7 @@ func classifyLink(f []string) *ccLink {
 		return nil
 	}
 	var out string
-	var objs []string
+	var objs, libRefs []string
 	var defines, linkOpts, incDirs []string
 	for i := 1; i < len(f); i++ {
 		if f[i] == "-o" && i+1 < len(f) {
@@ -357,6 +358,10 @@ func classifyLink(f []string) *ccLink {
 		}
 		if strings.HasSuffix(f[i], ".o") || strings.HasSuffix(f[i], ".lo") {
 			objs = append(objs, f[i]) // .lo: libtool object naming (curl)
+		} else if strings.HasSuffix(f[i], ".la") || strings.HasSuffix(f[i], ".a") {
+			// project library inputs: the consuming binary deps on the
+			// package that builds them (curl links ../lib/libcurlu.la)
+			libRefs = append(libRefs, f[i])
 		} else if strings.HasSuffix(f[i], ".c") || strings.HasSuffix(f[i], ".cc") ||
 			strings.HasSuffix(f[i], ".cpp") || strings.HasSuffix(f[i], ".cxx") {
 			// combined compile+link (sqlite's shell: "cc -o sqlite3
@@ -374,7 +379,7 @@ func classifyLink(f []string) *ccLink {
 	if out == "" || len(objs) == 0 || strings.HasSuffix(out, ".o") {
 		return nil // a compile, not a link
 	}
-	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines, LinkOpts: linkOpts, IncDirs: incDirs, SrcHeaders: map[string][]string{}}
+	return &ccLink{Cmd: f, Out: out, Objects: objs, Defines: defines, LinkOpts: linkOpts, IncDirs: incDirs, SrcHeaders: map[string][]string{}, LibRefs: libRefs}
 }
 
 // captureDepfiles re-runs each compile with -MD -MF to a temp depfile
@@ -940,6 +945,13 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				if !seen[lbl] {
 					seen[lbl] = true
 					depList = append(depList, lbl)
+				}
+			}
+			// project library inputs (.la/.a): dep on the owning package
+			for _, ref := range l.LibRefs {
+				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(relTo(wd, joinCtx(l.CtxDir, ref)))))
+				if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
+					addDep(ccLabel(rdir, primary.Name))
 				}
 			}
 			// combined compile+link sources that no same-signature library
