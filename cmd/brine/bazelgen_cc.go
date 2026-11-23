@@ -901,6 +901,19 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				if _, live := dirLibs[hdir]; live {
 					continue
 				}
+				// merged-away dirs (lib/curlx under lib) belong to their
+				// ancestor package — emitting a BUILD there creates an
+				// invalid subpackage
+				owned := false
+				for live := range dirLibs {
+					if live != "" && isAncestor(live, hdir) {
+						owned = true
+						break
+					}
+				}
+				if owned {
+					continue
+				}
 				hdrOnlyPkgs[hdir] = append(hdrOnlyPkgs[hdir], h)
 			}
 		}
