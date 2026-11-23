@@ -289,7 +289,7 @@ var ccCompilerRe = regexp.MustCompile(`^(cc|gcc|clang|gcc-[0-9]+|clang-[0-9]+|g\
 
 // classifyCompile recognizes a compilation command: compiler ... -c src -o obj
 func classifyCompile(f []string) *ccCompile {
-	if !ccCompilerRe.MatchString(f[0]) {
+	if !ccCompilerRe.MatchString(filepath.Base(f[0])) {
 		return nil
 	}
 	var src, obj string
@@ -326,7 +326,7 @@ func classifyCompile(f []string) *ccCompile {
 
 // classifyLink recognizes a link (compiler -o bin objs...) or archive (ar).
 func classifyLink(f []string) *ccLink {
-	if f[0] == "ar" || strings.HasSuffix(f[0], "/ar") {
+	if filepath.Base(f[0]) == "ar" {
 		// ar rcs libfoo.a objs...
 		var out string
 		var objs []string
@@ -342,7 +342,7 @@ func classifyLink(f []string) *ccLink {
 		}
 		return &ccLink{Cmd: f, Out: out, Objects: objs, IsAr: true}
 	}
-	if !ccCompilerRe.MatchString(f[0]) {
+	if !ccCompilerRe.MatchString(filepath.Base(f[0])) {
 		return nil
 	}
 	var out string
