@@ -547,6 +547,96 @@ func relLabelPath(wd, p string) string {
 	return rel
 }
 
+// mergeCyclicDirs repeatedly merges child directories into an ancestor
+// when their libraries reference each other's headers (a dependency
+// cycle). Only ancestor-descendant pairs merge (cross-package ../ srcs
+// are illegal in Bazel); sibling cycles surface as findings instead.
+func mergeCyclicDirs(dirLibs map[string][]*ccLibrary, objOwner map[string]string, libs map[string]*ccLibrary) {
+	refs := func(dir string) map[string]bool {
+		out := map[string]bool{}
+		for _, lib := range dirLibs[dir] {
+			for _, h := range lib.ExtHdrs {
+				hdir := filepath.ToSlash(filepath.Dir(h))
+				if hdir == "." {
+					hdir = ""
+				}
+				if hdir != dir {
+					out[hdir] = true
+				}
+			}
+		}
+		return out
+	}
+	changed := true
+	for changed {
+		changed = false
+		for dirA := range dirLibs {
+			depsA := refs(dirA)
+			for dirB := range depsA {
+				if dirB == dirA {
+					continue
+				}
+				if _, ok := dirLibs[dirB]; !ok {
+					continue
+				}
+				depsB := refs(dirB)
+				if !depsB[dirA] {
+					continue // not mutual
+				}
+				// merge child into ancestor (or lexicographic lesser)
+				parent, child := dirA, dirB
+				if !isAncestor(parent, child) {
+					if isAncestor(child, parent) {
+						parent, child = child, parent
+					} else {
+						continue // sibling cycle: leave for findings
+					}
+				}
+				prefix := ""
+				if child != "" {
+					prefix = strings.TrimPrefix(child, parent+"/") + "/"
+				}
+				for _, lib := range dirLibs[child] {
+					lib.Dir = parent
+					for i, src := range lib.Srcs {
+						lib.Srcs[i] = prefix + src
+					}
+					for i, h := range lib.Hdrs {
+						lib.Hdrs[i] = prefix + h
+					}
+					// headers under either merged dir are internal now
+					filtered := lib.ExtHdrs[:0]
+					for _, h := range lib.ExtHdrs {
+						hdir := filepath.ToSlash(filepath.Dir(h))
+						if hdir == "." {
+							hdir = ""
+						}
+						if hdir != parent && hdir != child {
+							filtered = append(filtered, h)
+						}
+					}
+					lib.ExtHdrs = filtered
+					dirLibs[parent] = append(dirLibs[parent], lib)
+				}
+				delete(dirLibs, child)
+				changed = true
+				break
+			}
+			if changed {
+				break
+			}
+		}
+	}
+}
+
+// isAncestor reports whether dir a is an ancestor (prefix) of dir b.
+func isAncestor(a, b string) bool {
+	if a == "" {
+		return true // root is ancestor of all
+	}
+	return strings.HasPrefix(b, a+"/")
+}
+
 // flagSignature identifies a compile's flag set: sorted defines+includes.
 func flagSignature(c ccCompile) string {
 	all := append(append([]string{}, c.Defines...), c.IncDirs...)
@@ -644,6 +734,13 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 	}
+	// merge mutually-dependent directories: curl's lib/ and lib/curlx/
+	// (and vauth/vquic/vssh/vtls) include each other's headers, which
+	// Bazel rejects as a dependency cycle. A child dir with no BUILD of
+	// its own belongs to the parent's package — merge child sources into
+	// the ancestor library with subdir-relative paths.
+	mergeCyclicDirs(dirLibs, objOwner, libs)
+
 	// suffix flag-set variants within a dir: lib, lib_2, lib_3...
 	dirLibs := map[string][]*ccLibrary{}
 	for _, lib := range libs {
