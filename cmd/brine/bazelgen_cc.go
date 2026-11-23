@@ -286,17 +286,12 @@ func flagSignature(c ccCompile) string {
 
 // primaryLibForDir returns the first-created library in a dir (deps and
 // headers resolve against it).
-func primaryLibForDir(libs map[string]*ccLibrary, dir string) *ccLibrary {
-	var best *ccLibrary
-	for _, l := range libs {
-		if l.Dir != dir {
-			continue
-		}
-		if best == nil || l.Name < best.Name {
-			best = l
-		}
+func primaryLibForDir(dirLibs map[string][]*ccLibrary, dir string) *ccLibrary {
+	ls := dirLibs[dir]
+	if len(ls) == 0 {
+		return nil
 	}
-	return best
+	return ls[0] // sorted by name at build time
 }
 
 // isSystemInclude filters toolchain/system -I paths from generated
@@ -314,13 +309,17 @@ func isSystemInclude(inc string) bool {
 }
 
 // generateCCBuilds writes BUILD.bazel files from the observed model.
+// One file per directory, written once (idempotent regeneration): all of
+// the dir's cc_library rules (one per flag signature) followed by the
+// cc_binary rules whose outputs live there.
 func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
-	// group compiles by source directory AND flag signature: the same
-	// source compiled twice with different defines (sqlite compiles its
-	// amalgamation for both the library and the shell) cannot live in one
-	// cc_library — different flag sets get different targets.
-	libs := map[string]*ccLibrary{}
-	libSeq := map[string]int{}
+	var findings []finding
+
+	// group compiles by (dir, flag signature): the same source compiled
+	// twice with different defines (sqlite compiles its amalgamation for
+	// both the library and the shell) cannot live in one cc_library —
+	// different flag sets get different targets.
+	libs := map[string]*ccLibrary{} // key: dir + "|" + flag signature
 	objOwner := map[string]string{} // obj path -> lib key
 	for _, c := range compiles {
 		dir := filepath.ToSlash(filepath.Dir(c.Src))
@@ -330,12 +329,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		key := dir + "|" + flagSignature(c)
 		lib, ok := libs[key]
 		if !ok {
-			libSeq[dir]++
-			nm := ccLibName(dir)
-			if libSeq[dir] > 1 {
-				nm = fmt.Sprintf("%s_%d", nm, libSeq[dir]) // flag-set variant in the same dir
-			}
-			lib = &ccLibrary{Dir: dir, Name: nm}
+			lib = &ccLibrary{Dir: dir, Name: ccLibName(dir)}
 			libs[key] = lib
 		}
 		if !contains(lib.Srcs, filepath.Base(c.Src)) {
@@ -369,66 +363,20 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 	}
-
-	var findings []finding
-
-	// write each library's BUILD file
-	dirs := make([]string, 0, len(libs))
-	for d := range libs {
-		dirs = append(dirs, d)
+	// suffix flag-set variants within a dir: lib, lib_2, lib_3...
+	dirLibs := map[string][]*ccLibrary{}
+	for _, lib := range libs {
+		dirLibs[lib.Dir] = append(dirLibs[lib.Dir], lib)
 	}
-	sort.Strings(dirs)
-	for _, dir := range dirs {
-		lib := libs[dir]
-		var b strings.Builder
-		b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_library\", \"cc_binary\")\n\n")
-		name := lib.Name
-		b.WriteString("cc_library(\n")
-		fmt.Fprintf(&b, "    name = %q,\n", name)
-		writeSortedStrings(&b, "srcs", lib.Srcs)
-		if len(lib.Hdrs) > 0 {
-			writeSortedStrings(&b, "hdrs", lib.Hdrs)
-		}
-		// deps: cross-dir header reads -> the library owning that dir
-		deps := map[string]bool{}
-		for _, h := range lib.ExtHdrs {
-			hdir := filepath.ToSlash(filepath.Dir(h))
-			if hdir == "." {
-				hdir = ""
-			}
-			if primary := primaryLibForDir(libs, hdir); primary != nil && hdir != dir {
-				deps[ccLabel(hdir, primary.Name)] = true
-			} else {
-				findings = append(findings, finding{dirOrEmpty(dir), "cc-unowned-header", h})
-			}
-		}
-		if len(deps) > 0 {
-			var dl []string
-			for d := range deps {
-				dl = append(dl, d)
-			}
-			writeSortedStrings(&b, "deps", dl)
-		}
-		if len(lib.Defines) > 0 {
-			writeSortedStrings(&b, "defines", lib.Defines)
-		}
-		if len(lib.IncDirs) > 0 {
-			writeSortedStrings(&b, "includes", lib.IncDirs)
-		}
-		b.WriteString("    visibility = [\"//visibility:public\"],\n")
-		b.WriteString(")\n")
-
-		buildDir := dir
-		if buildDir == "" {
-			buildDir = "."
-		}
-		if err := os.WriteFile(filepath.Join(wd, buildDir, "BUILD.bazel"), []byte(b.String()), 0o644); err != nil {
-			findings = append(findings, finding{dirOrEmpty(dir), "write-error", err.Error()})
+	for dir, ls := range dirLibs {
+		sort.Slice(ls, func(i, j int) bool { return ls[i].Name < ls[j].Name })
+		for i := 1; i < len(ls); i++ {
+			ls[i].Name = fmt.Sprintf("%s_%d", ccLibName(dir), i+1)
 		}
 	}
-	// binaries: one cc_binary per link command, in the output's directory
-	// (the link's own-dir objects come via that dir's library; cross-dir
-	// objects via their libraries)
+
+	// binaries by output dir
+	binsByDir := map[string][]ccLink{}
 	for _, l := range links {
 		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") {
 			continue // archives and shared libs are grouping hints; cc_library covers compilation
@@ -437,37 +385,95 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		if binDir == "." {
 			binDir = ""
 		}
+		binsByDir[binDir] = append(binsByDir[binDir], l)
+	}
+
+	// one BUILD file per dir: libraries + binaries composed, single write
+	allDirs := map[string]bool{}
+	for dir := range dirLibs {
+		allDirs[dir] = true
+	}
+	for dir := range binsByDir {
+		allDirs[dir] = true
+	}
+	sortedDirs := make([]string, 0, len(allDirs))
+	for dir := range allDirs {
+		sortedDirs = append(sortedDirs, dir)
+	}
+	sort.Strings(sortedDirs)
+
+	for _, dir := range sortedDirs {
 		var b strings.Builder
-		b.WriteString("cc_binary(\n")
-		fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
-		b.WriteString("    deps = [\n")
-		seen := map[string]bool{}
-		for _, o := range l.Objects {
-			key, ok := objOwner[o]
-			if !ok {
-				continue // object from an unobserved compile (prebuilt?)
+		hasLib := len(dirLibs[dir]) > 0
+		if hasLib {
+			b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_library\", \"cc_binary\")\n\n")
+		} else {
+			b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_binary\")\n\n")
+		}
+		// libraries in this dir
+		for _, lib := range dirLibs[dir] {
+			b.WriteString("cc_library(\n")
+			fmt.Fprintf(&b, "    name = %q,\n", lib.Name)
+			writeSortedStrings(&b, "srcs", lib.Srcs)
+			if len(lib.Hdrs) > 0 {
+				writeSortedStrings(&b, "hdrs", lib.Hdrs)
 			}
-			if lib, ok := libs[key]; ok {
-				lbl := ccLabel(lib.Dir, lib.Name)
-				if !seen[lbl] {
-					seen[lbl] = true
-					fmt.Fprintf(&b, "        %q,\n", lbl)
+			deps := map[string]bool{}
+			for _, h := range lib.ExtHdrs {
+				hdir := filepath.ToSlash(filepath.Dir(h))
+				if hdir == "." {
+					hdir = ""
+				}
+				if primary := primaryLibForDir(dirLibs, hdir); primary != nil && hdir != dir {
+					deps[ccLabel(hdir, primary.Name)] = true
+				} else {
+					findings = append(findings, finding{dirOrEmpty(dir), "cc-unowned-header", h})
 				}
 			}
+			if len(deps) > 0 {
+				var dl []string
+				for d := range deps {
+					dl = append(dl, d)
+				}
+				writeSortedStrings(&b, "deps", dl)
+			}
+			if len(lib.Defines) > 0 {
+				writeSortedStrings(&b, "defines", lib.Defines)
+			}
+			if len(lib.IncDirs) > 0 {
+				writeSortedStrings(&b, "includes", lib.IncDirs)
+			}
+			b.WriteString("    visibility = [\"//visibility:public\"],\n")
+			b.WriteString(")\n\n")
 		}
-		b.WriteString("    ],\n)\n")
-
-		buildDir := binDir
+		// binaries whose outputs live in this dir
+		for _, l := range binsByDir[dir] {
+			b.WriteString("cc_binary(\n")
+			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
+			var depList []string
+			seen := map[string]bool{}
+			for _, o := range l.Objects {
+				key, ok := objOwner[o]
+				if !ok {
+					continue // object from an unobserved compile (prebuilt?)
+				}
+				if lib, ok := libs[key]; ok {
+					lbl := ccLabel(lib.Dir, lib.Name)
+					if !seen[lbl] {
+						seen[lbl] = true
+						depList = append(depList, lbl)
+					}
+				}
+			}
+			writeSortedStrings(&b, "deps", depList)
+			b.WriteString(")\n\n")
+		}
+		buildDir := dir
 		if buildDir == "" {
 			buildDir = "."
 		}
-		path := filepath.Join(wd, buildDir, "BUILD.bazel")
-		if data, err := os.ReadFile(path); err == nil {
-			// append to the existing library BUILD
-			os.WriteFile(path, append(data, []byte("\n\n"+b.String())...), 0o644)
-		} else {
-			full := "load(\"@rules_cc//cc:defs.bzl\", \"cc_binary\")\n\n" + b.String()
-			os.WriteFile(path, []byte(full), 0o644)
+		if err := os.WriteFile(filepath.Join(wd, buildDir, "BUILD.bazel"), []byte(b.String()), 0o644); err != nil {
+			findings = append(findings, finding{dirOrEmpty(dir), "write-error", err.Error()})
 		}
 	}
 	return findings
@@ -690,10 +696,11 @@ func cmdBazelGenerateCC(wd string, validateOnly bool) {
 	if validateOnly {
 		findings = validateCCBuilds(compiles, links, wd)
 	} else {
-		findings = generateCCBuilds(compiles, links, wd)
 		// generation followed by the adversarial re-check: parse what was
-		// written and compare against the same depfile truth
-		findings = validateCCBuilds(compiles, links, wd)
+		// written and compare against the same depfile truth. Both sets
+		// reported — a write error must not be masked by validation.
+		findings = append(findings, generateCCBuilds(compiles, links, wd)...)
+		findings = append(findings, validateCCBuilds(compiles, links, wd)...)
 	}
 	if len(findings) == 0 {
 		fmt.Printf("[brine] bazel-generate: validation clean — %d compiles match depfile ground truth\n", len(compiles))
