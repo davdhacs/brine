@@ -269,6 +269,7 @@ func stripCCFlags(args []string, flags ...string) []string {
 // ccLibrary is a generated cc_library: one per source directory.
 type ccLibrary struct {
 	Dir     string
+	Name    string
 	Srcs    []string
 	Hdrs    []string // same-dir headers
 	ExtHdrs []string // cross-dir project headers (dep edges)
@@ -276,23 +277,71 @@ type ccLibrary struct {
 	IncDirs []string
 }
 
+// flagSignature identifies a compile's flag set: sorted defines+includes.
+func flagSignature(c ccCompile) string {
+	all := append(append([]string{}, c.Defines...), c.IncDirs...)
+	sort.Strings(all)
+	return strings.Join(all, ",")
+}
+
+// primaryLibForDir returns the first-created library in a dir (deps and
+// headers resolve against it).
+func primaryLibForDir(libs map[string]*ccLibrary, dir string) *ccLibrary {
+	var best *ccLibrary
+	for _, l := range libs {
+		if l.Dir != dir {
+			continue
+		}
+		if best == nil || l.Name < best.Name {
+			best = l
+		}
+	}
+	return best
+}
+
+// isSystemInclude filters toolchain/system -I paths from generated
+// includes (compiler territory, not project structure).
+func isSystemInclude(inc string) bool {
+	if !filepath.IsAbs(inc) {
+		return false
+	}
+	for _, p := range []string{"/usr/", "/opt/", "/Applications/"} {
+		if strings.HasPrefix(inc, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // generateCCBuilds writes BUILD.bazel files from the observed model.
 func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding {
-	// group compiles by source directory
+	// group compiles by source directory AND flag signature: the same
+	// source compiled twice with different defines (sqlite compiles its
+	// amalgamation for both the library and the shell) cannot live in one
+	// cc_library — different flag sets get different targets.
 	libs := map[string]*ccLibrary{}
-	objOwner := map[string]string{} // obj path -> lib dir
+	libSeq := map[string]int{}
+	objOwner := map[string]string{} // obj path -> lib key
 	for _, c := range compiles {
 		dir := filepath.ToSlash(filepath.Dir(c.Src))
 		if dir == "." {
 			dir = ""
 		}
-		lib, ok := libs[dir]
+		key := dir + "|" + flagSignature(c)
+		lib, ok := libs[key]
 		if !ok {
-			lib = &ccLibrary{Dir: dir}
-			libs[dir] = lib
+			libSeq[dir]++
+			nm := ccLibName(dir)
+			if libSeq[dir] > 1 {
+				nm = fmt.Sprintf("%s_%d", nm, libSeq[dir]) // flag-set variant in the same dir
+			}
+			lib = &ccLibrary{Dir: dir, Name: nm}
+			libs[key] = lib
 		}
-		lib.Srcs = append(lib.Srcs, filepath.Base(c.Src))
-		objOwner[c.Obj] = dir
+		if !contains(lib.Srcs, filepath.Base(c.Src)) {
+			lib.Srcs = append(lib.Srcs, filepath.Base(c.Src))
+		}
+		objOwner[c.Obj] = key
 		for _, h := range c.Headers {
 			hdir := filepath.ToSlash(filepath.Dir(h))
 			if hdir == "." {
@@ -312,6 +361,9 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			}
 		}
 		for _, inc := range c.IncDirs {
+			if isSystemInclude(inc) {
+				continue // /usr/include and friends are toolchain territory
+			}
 			if !contains(lib.IncDirs, inc) {
 				lib.IncDirs = append(lib.IncDirs, inc)
 			}
@@ -330,7 +382,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		lib := libs[dir]
 		var b strings.Builder
 		b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_library\", \"cc_binary\")\n\n")
-		name := ccLibName(dir)
+		name := lib.Name
 		b.WriteString("cc_library(\n")
 		fmt.Fprintf(&b, "    name = %q,\n", name)
 		writeSortedStrings(&b, "srcs", lib.Srcs)
@@ -344,8 +396,8 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			if hdir == "." {
 				hdir = ""
 			}
-			if _, ok := libs[hdir]; ok && hdir != dir {
-				deps[ccLabel(hdir, ccLibName(hdir))] = true
+			if primary := primaryLibForDir(libs, hdir); primary != nil && hdir != dir {
+				deps[ccLabel(hdir, primary.Name)] = true
 			} else {
 				findings = append(findings, finding{dirOrEmpty(dir), "cc-unowned-header", h})
 			}
@@ -378,8 +430,8 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 	// (the link's own-dir objects come via that dir's library; cross-dir
 	// objects via their libraries)
 	for _, l := range links {
-		if l.IsAr {
-			continue // archives are grouping hints, not targets
+		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") {
+			continue // archives and shared libs are grouping hints; cc_library covers compilation
 		}
 		binDir := filepath.ToSlash(filepath.Dir(l.Out))
 		if binDir == "." {
@@ -391,14 +443,16 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		b.WriteString("    deps = [\n")
 		seen := map[string]bool{}
 		for _, o := range l.Objects {
-			od, ok := objOwner[o]
+			key, ok := objOwner[o]
 			if !ok {
 				continue // object from an unobserved compile (prebuilt?)
 			}
-			lbl := ccLabel(od, ccLibName(od))
-			if !seen[lbl] {
-				seen[lbl] = true
-				fmt.Fprintf(&b, "        %q,\n", lbl)
+			if lib, ok := libs[key]; ok {
+				lbl := ccLabel(lib.Dir, lib.Name)
+				if !seen[lbl] {
+					seen[lbl] = true
+					fmt.Fprintf(&b, "        %q,\n", lbl)
+				}
 			}
 		}
 		b.WriteString("    ],\n)\n")
