@@ -38,6 +38,45 @@ Status legend: [x] done+validated, [~] in progress, [ ] next up.
   works around this with custom scripts. Documented as known limitation;
   fix = run gazelle against external repos or use go_deps' gazelle
   generation attributes.
+- [x] **collector remote-build end-to-end (mac → tone)** — cmake build
+  inside Docker builder container, receipt hit (494f54a632ce6410),
+  898 outputs / 1.6GB restored to mac with sha256 verification,
+  82MB ELF x86-64 binary runs. Total 21m9s = 13.6min closure
+  (git-tracked fallback: docker exec is opaque to observation,
+  ~20K files) + 7.5min eager download of all outputs (898 files
+  where only the binary matters). Two optimization targets below.
+- [~] Docker-native closure (`key_images`) — fold the builder image
+  digest into the receipt key. `docker inspect` gives:
+  `.Image` (sha256 content address for the entire toolchain —
+  gRPC, protobuf, gcc, sysroot — one hash replaces hashing
+  thousands of system files) and `.Mounts` (the bind-mount table,
+  folded in as the host↔container mapping). The containerized-
+  builder pattern bind-mounts source (never COPY: no context
+  transfer, outputs flow back out, source mutates / image is
+  immutable), so the closure splits cleanly: image digest covers
+  the environment half, normal host-side hashing covers the
+  mounted source half. Remaining source-side cost needs
+  key_files/depfile precision (~200 files from depfiles vs 20K
+  git-tracked) — the collector case study already proved 1.6s
+  receipt hits with that closure. Design: `key_images` config
+  listing image refs (resolved via docker inspect at closure
+  time) + mount table from the running container; no hashing
+  inside the image ever happens.
+- [~] Remote-build report-only + selective restore — separate
+  "build succeeded" from "fetch the bytes" (Bazel REAPI model:
+  ActionResult vs CAS fetching). Plan:
+  1. `remote-build` default becomes report-only: dispatch →
+     receipt key → print output summary (count, bytes, notable
+     paths from the manifest, which is already fetched — ~270KB
+     metadata) → exit. No blob downloads.
+  2. New `brine restore <key> [pattern]` — selective fetch by
+     path pattern, verify-on-restore, place at manifest-relative
+     paths. `brine restore <key>` = everything.
+  3. `remote-build --restore` keeps the eager behavior for
+     callers that want it.
+  Collector numbers: full eager 7.5min/1.6GB → report-only ~0s
+  + selective binary fetch ~30s/82MB. Combined with the closure
+  fix, warm remote-build target: ~30s end-to-end.
 - [ ] cel-go-style fidelity experiment for a C/C++ project.
 
 ## Real-world C/C++ findings so far (keep for the paper)
