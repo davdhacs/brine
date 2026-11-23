@@ -1163,11 +1163,19 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				writeSortedStrings(&b, "deps", dl)
 			}
 			if len(lib.Defines) > 0 {
-				// local_defines: per-variant defines must NOT propagate to
-				// dependents — the .la dominant's CURL_STATICLIB/
-				// UNITTESTS leaked into the curl binary's tool_main
-				// compile and #ifndef UNITTESTS compiled main() out
-				writeSortedStrings(&b, "local_defines", lib.Defines)
+				// copts with -D flags: per-variant defines must NOT
+				// propagate to dependents (the .la dominant's
+				// CURL_STATICLIB/UNITTESTS leaked into the curl binary's
+				// tool_main compile). copts (not local_defines) because
+				// Bazel's local_defines variable substitution breaks on
+				// cmake defines with special chars (INTERESTING_SUBSYS=
+				// "perf_event", "cpu", ... — found via falcosecurity-libs
+				// driver on the collector)
+				var dflags []string
+				for _, d := range lib.Defines {
+					dflags = append(dflags, "-D"+d)
+				}
+				writeSortedStrings(&b, "copts", dflags)
 			}
 			if len(lib.IncDirs) > 0 {
 				writeSortedStrings(&b, "includes", lib.IncDirs)
