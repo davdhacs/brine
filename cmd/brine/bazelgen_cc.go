@@ -1149,6 +1149,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 							continue
 						}
 					}
+					// srcs are package-relative: the binary's BUILD
+					// resolves them against its own dir
+					if dir != "" && strings.HasPrefix(src, dir+"/") {
+						src = strings.TrimPrefix(src, dir+"/")
+					}
 					if !contains(srcList, src) {
 						srcList = append(srcList, src)
 					}
