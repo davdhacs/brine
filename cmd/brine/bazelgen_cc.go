@@ -1115,7 +1115,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 				writeSortedStrings(&b, "deps", dl)
 			}
 			if len(lib.Defines) > 0 {
-				writeSortedStrings(&b, "defines", lib.Defines)
+				// local_defines: per-variant defines must NOT propagate to
+				// dependents — the .la dominant's CURL_STATICLIB/
+				// UNITTESTS leaked into the curl binary's tool_main
+				// compile and #ifndef UNITTESTS compiled main() out
+				writeSortedStrings(&b, "local_defines", lib.Defines)
 			}
 			if len(lib.IncDirs) > 0 {
 				writeSortedStrings(&b, "includes", lib.IncDirs)
