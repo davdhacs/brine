@@ -59,11 +59,13 @@ type pkgTruth struct {
 
 // buildRule is one parsed rule from a BUILD file.
 type buildRule struct {
-	kind       string // go_library, go_binary, go_test, ...
+	kind       string // go_library, go_binary, go_test, cc_library, ...
 	name       string
 	srcs       []string
 	deps       []string
 	embed      []string
+	hdrs       []string // cc_library
+	defines    []string // cc_library
 	importpath string
 }
 
@@ -99,6 +101,18 @@ func cmdBazelGenerate(args []string) {
 			}
 		default:
 			fatal("bazel-generate: unknown flag %s (use --validate, --fix, --excludes, --gazelle <path>)", args[i])
+		}
+	}
+
+	// Language routing: Go modules take the gazelle path; a Makefile
+	// without go.mod takes the C/C++ observation path (gazelle's blind
+	// spot — include paths, defines, and header closures only exist in
+	// the observed build).
+	if _, err := os.Stat("go.mod"); os.IsNotExist(err) {
+		if _, err := os.Stat("Makefile"); err == nil {
+			wd, _ := os.Getwd()
+			cmdBazelGenerateCC(wd, validateOnly)
+			return
 		}
 	}
 
@@ -677,6 +691,15 @@ func parseBuildFile(path string) ([]buildRule, error) {
 		case strings.HasPrefix(t, "embed = "):
 			curAttr = "embed"
 			maybeCollectList(cur, &curAttr, strings.TrimPrefix(t, "embed = "))
+		case strings.HasPrefix(t, "hdrs = "):
+			curAttr = "hdrs"
+			maybeCollectList(cur, &curAttr, strings.TrimPrefix(t, "hdrs = "))
+		case strings.HasPrefix(t, "defines = "):
+			curAttr = "defines"
+			maybeCollectList(cur, &curAttr, strings.TrimPrefix(t, "defines = "))
+		case strings.HasPrefix(t, "includes = "):
+			curAttr = "includes"
+			maybeCollectList(cur, &curAttr, strings.TrimPrefix(t, "includes = "))
 		case strings.HasPrefix(t, "data = "):
 			curAttr = "data" // collected but unused
 		case curAttr != "" && (strings.HasPrefix(t, "\"") || strings.HasPrefix(t, "glob(")):
@@ -724,6 +747,10 @@ func attrList(r *buildRule, attr string) *[]string {
 		return &r.deps
 	case "embed":
 		return &r.embed
+	case "hdrs":
+		return &r.hdrs
+	case "defines", "includes":
+		return &r.defines
 	}
 	return &r.deps
 }
@@ -886,6 +913,16 @@ func printFindings(findings []finding, total int) {
 			fmt.Printf("  ✗ %s: MISSING DEP: %s (imported, no dep label matches)\n", f.dir, f.detail)
 		case "extra-src":
 			fmt.Printf("  ✗ %s: EXTRA SRC: %s declared in BUILD but not compiled (build tags?)\n", f.dir, f.detail)
+		case "missing-hdr":
+			fmt.Printf("  ✗ %s: MISSING HDR: %s read by observed compiles (depfile) but not declared in hdrs\n", f.dir, f.detail)
+		case "missing-define":
+			fmt.Printf("  ✗ %s: MISSING DEFINE: %s used by observed compiles but not declared\n", f.dir, f.detail)
+		case "missing-binary":
+			fmt.Printf("  ✗ %s: MISSING BINARY: %s linked by the observed build but no cc_binary declares it\n", f.dir, f.detail)
+		case "cc-unowned-header":
+			fmt.Printf("  ✗ %s: UNOWNED HEADER: %s read by this dir's compiles but no library owns it\n", f.dir, f.detail)
+		case "write-error":
+			fmt.Printf("  ✗ %s: write error: %s\n", f.dir, f.detail)
 		}
 	}
 	fmt.Printf("\nThese are the silent under-declarations that Bazel sandbox\n")

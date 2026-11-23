@@ -107,6 +107,40 @@ carry no BUILD files at all — either no Bazel or generation at build
 time — so regeneration-from-source is the only path to a Bazel setup
 for them.
 
+## C/C++ mode
+
+`brine bazel-generate` routes to C/C++ generation when there is no go.mod
+and a Makefile is present — gazelle's blind spot, where observation wins:
+include paths, defines, and header closures only exist in the observed
+build. (Other build systems: set `BRINE_CC_DRY` to a dry-run command,
+e.g. `ninja -t commands` for cmake/ninja projects.)
+
+Pipeline:
+
+1. **Discovery**: `make -Bn` (unconditional dry run) — compile commands
+   (`cc -c src -o obj`), archives (`ar`), and links (`cc -o bin objs`)
+   classified by shape.
+2. **Depfile capture**: each compile re-runs with `-MD -MF` redirected to
+   a temp file and `-o` to a throwaway object — the exact header closure
+   per object, whether or not the project itself uses -MD.
+3. **Generation**: one cc_library per source directory (srcs, hdrs from
+   same-dir depfile headers, deps from cross-dir header reads, defines
+   and includes from observed flags); one cc_binary per link, in the
+   output's directory, wired to the libraries providing its objects.
+4. **Validation** (also `--validate`-only): the depfile model re-derived
+   and compared against the BUILD files on disk — missing srcs, hdrs,
+   deps, defines, and binaries are findings.
+
+Validated on a multi-dir project (cross-dir includes, header-only
+header, defines, static archive, link): generated BUILD files build
+under `bazel build` (rules_cc 0.2.17) with output identical to the
+make-built binary. Tamper tests — removed hdr, dep, define — are each
+caught by the validator with precise findings.
+
+Known limits (first increment): Makefile-shaped discovery, per-directory
+library granularity, no per-file copts splitting, generated headers not
+yet distinguished from static ones (both appear in hdrs from depfiles).
+
 ## Positioning
 
 Composition, not competition: gazelle owns static generation for
