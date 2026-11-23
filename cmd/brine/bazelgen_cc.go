@@ -715,7 +715,16 @@ func primaryLibForDir(dirLibs map[string][]*ccLibrary, dir string) *ccLibrary {
 	if len(ls) == 0 {
 		return nil
 	}
-	return ls[0] // sorted by name at build time
+	// the package's dominant build: most sources wins (curl's lib package
+	// has curlx_lib alphabetically first with 13 sources, but the package
+	// IS lib_lib with ~90 — cross-package deps must reach the main build)
+	best := ls[0]
+	for _, l := range ls[1:] {
+		if len(l.Srcs) > len(best.Srcs) {
+			best = l
+		}
+	}
+	return best
 }
 
 // isSystemInclude filters toolchain/system -I paths from generated
