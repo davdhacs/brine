@@ -64,8 +64,8 @@ func ccDiscovery(dryCmd []string, wd string) ([]ccCompile, []ccLink, error) {
 	var compiles []ccCompile
 	var links []ccLink
 	// join backslash continuations first: real Makefiles wrap link lines
-	// across several lines (sqlite: "cc -o sqlite3 \
-  shell.o ...")
+	// across several lines (sqlite wraps its link commands with
+	// trailing backslashes)
 	text := strings.ReplaceAll(string(out), "\\\n", " ")
 	for _, line := range strings.Split(text, "\n") {
 		fields := splitCommand(line)
