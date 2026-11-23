@@ -410,6 +410,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			if isSystemInclude(inc) {
 				continue // /usr/include and friends are toolchain territory
 			}
+			if inc == "." {
+				continue // same-dir quoted includes resolve implicitly in
+				// Bazel (sources and hdrs share the sandbox dir); an
+				// explicit "." is rejected as a workspace-root include
+			}
 			if !contains(lib.IncDirs, inc) {
 				lib.IncDirs = append(lib.IncDirs, inc)
 			}
