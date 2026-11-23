@@ -287,6 +287,55 @@ func stripCCFlags(args []string, flags ...string) []string {
 	return out
 }
 
+// captureLinkSourceDepfiles depfile-captures the sources of combined
+// compile+link commands (they are never compiled separately, so their
+// header closures exist nowhere else — sqlite's shell.c reads sqlite3.h
+// only here, and without it the generated rule resolves the header from
+// /usr/include instead: version mismatch, found via parity).
+func captureLinkSourceDepfiles(links []ccLink, wd string) error {
+	tmpDir, err := os.MkdirTemp("", "brine-ccdeps")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+	for li := range links {
+		l := &links[li]
+		if l.IsAr || l.SrcHeaders == nil {
+			continue
+		}
+		si := 0
+		for _, o := range l.Objects {
+			if !isCSource(o) {
+				continue
+			}
+			src := relTo(wd, o)
+			depFile := filepath.Join(tmpDir, fmt.Sprintf("link%d-%d.d", li, si))
+			throwObj := filepath.Join(tmpDir, fmt.Sprintf("linkthrow%d-%d.o", li, si))
+			args := []string{l.Cmd[0], "-c", o}
+			for _, d := range l.Defines {
+				args = append(args, "-D"+d)
+			}
+			for _, inc := range l.IncDirs {
+				args = append(args, "-I"+inc)
+			}
+			args = append(args, "-MD", "-MF", depFile, "-o", throwObj)
+			cmd := exec.Command(args[0], args[1:]...)
+			cmd.Dir = wd
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("link-source depfile capture for %s: %v\nargv: %s\n%s", src, err, strings.Join(args, " "), out)
+			}
+			l.SrcHeaders[src] = depfiles.Parse(depFile, wd)
+			si++
+		}
+	}
+	return nil
+}
+
+func isCSource(p string) bool {
+	return strings.HasSuffix(p, ".c") || strings.HasSuffix(p, ".cc") ||
+		strings.HasSuffix(p, ".cpp") || strings.HasSuffix(p, ".cxx")
+}
+
 // ccLibrary is a generated cc_library: one per source directory.
 type ccLibrary struct {
 	Dir     string
@@ -560,10 +609,22 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					srcs := dedup(linkLibSrcs[sdir])
 					libName := filepath.Base(l.Out) + "_lib"
 					// headers: same-dir headers of the sources, known from
-					// the depfile model of same-dir libraries
+					// the depfile model of same-dir libraries and from the
+					// link-source depfile capture (shell.c's sqlite3.h)
 					var hdrs []string
 					for _, lib := range dirLibs[sdir] {
 						hdrs = append(hdrs, lib.Hdrs...)
+					}
+					for _, src := range srcs {
+						for _, h := range l.SrcHeaders[src] {
+							hdir := filepath.ToSlash(filepath.Dir(h))
+							if hdir == "." {
+								hdir = ""
+							}
+							if hdir == sdir {
+								hdrs = append(hdrs, filepath.Base(h))
+							}
+						}
 					}
 					b.WriteString("cc_library(\n")
 					fmt.Fprintf(&b, "    name = %q,\n", libName)
@@ -843,6 +904,9 @@ func cmdBazelGenerateCC(wd string, validateOnly bool) {
 	fmt.Printf("[brine] bazel-generate: %d compiles, %d link/archive steps\n", len(compiles), len(links))
 
 	if err := captureDepfiles(compiles, wd); err != nil {
+		fatal("bazel-generate cc: %v", err)
+	}
+	if err := captureLinkSourceDepfiles(links, wd); err != nil {
 		fatal("bazel-generate cc: %v", err)
 	}
 	totalHdrs := 0
