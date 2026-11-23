@@ -948,8 +948,12 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 	}
 
-	// binaries by output dir
+	// binaries by output dir — deduplicated by output: make -n can emit
+	// the same binary's link from multiple recursion contexts (marker
+	// mis-attribution), producing phantom duplicates; keep the link whose
+	// objects resolve against the most compiles
 	binsByDir := map[string][]ccLink{}
+	seenOut := map[string]int{} // out -> index in its binsByDir slice
 	for _, l := range links {
 		if l.IsAr || strings.HasSuffix(l.Out, ".so") || strings.HasSuffix(l.Out, ".dylib") || strings.HasSuffix(l.Out, ".la") {
 			continue // archives, shared libs, and libtool .la libraries are
@@ -959,6 +963,26 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		if binDir == "." {
 			binDir = ""
 		}
+		resolved := 0
+		for _, o := range l.Objects {
+			if _, ok := objCompile[o]; ok {
+				resolved++
+			}
+		}
+		if idx, dup := seenOut[l.Out]; dup {
+			ls := binsByDir[binDir]
+			oldResolved := 0
+			for _, o := range ls[idx].Objects {
+				if _, ok := objCompile[o]; ok {
+					oldResolved++
+				}
+			}
+			if resolved > oldResolved {
+				ls[idx] = l
+			}
+			continue
+		}
+		seenOut[l.Out] = len(binsByDir[binDir])
 		binsByDir[binDir] = append(binsByDir[binDir], l)
 	}
 
