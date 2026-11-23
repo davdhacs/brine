@@ -148,11 +148,14 @@ func classifyCompile(f []string) *ccCompile {
 		return nil
 	}
 	var src, obj string
+	hasC := false
 	var defines, incs []string
 	for i := 1; i < len(f); i++ {
 		switch {
 		case f[i] == "-c":
-			// compilation marker
+			hasC = true // compilation marker — REQUIRED: without it a
+			// combined compile+link ("cc -o sqlite3 shell.c sqlite3.c")
+			// would classify as a compile and starve the link classifier
 		case f[i] == "-o" && i+1 < len(f):
 			obj = f[i+1]
 			i++
@@ -165,7 +168,7 @@ func classifyCompile(f []string) *ccCompile {
 			src = f[i]
 		}
 	}
-	if src == "" || obj == "" {
+	if src == "" || obj == "" || !hasC {
 		return nil
 	}
 	return &ccCompile{Cmd: f, Src: src, Obj: obj, Defines: defines, IncDirs: incs}
@@ -529,7 +532,14 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			if len(srcList) > 0 {
 				writeSortedStrings(&b, "srcs", srcList)
 			}
-			writeSortedStrings(&b, "deps", depList)
+			if len(depList) > 0 {
+				writeSortedStrings(&b, "deps", depList)
+			}
+			// combined compile+link: the binary compiles its own srcs and
+			// needs the observed defines to compile them the same way
+			if len(srcList) > 0 && len(l.Defines) > 0 {
+				writeSortedStrings(&b, "defines", l.Defines)
+			}
 			b.WriteString(")\n\n")
 		}
 		buildDir := dir
@@ -657,34 +667,51 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			findings = append(findings, finding{dirOrEmpty(dir), "no-build", "no BUILD file for observed compiles"})
 			continue
 		}
-		var libRule *buildRule
+		// all cc_library rules in the dir: a source/header/define is
+		// satisfied when ANY of them declares it (flag-signature variants
+		// split one dir's compiles across several libraries)
+		var libRules []*buildRule
 		for i := range rules {
 			if rules[i].kind == "cc_library" {
-				libRule = &rules[i]
-				break
+				libRules = append(libRules, &rules[i])
 			}
 		}
-		if libRule == nil {
+		if len(libRules) == 0 {
 			findings = append(findings, finding{dirOrEmpty(dir), "no-build", "no cc_library for observed compiles"})
 			continue
 		}
+		anyDeclares := func(get func(*buildRule) []string, want string) bool {
+			for _, r := range libRules {
+				if contains(get(r), want) {
+					return true
+				}
+			}
+			return false
+		}
 		for _, src := range m.srcs {
-			if !contains(libRule.srcs, src) {
+			if !anyDeclares(func(r *buildRule) []string { return r.srcs }, src) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-src", src})
 			}
 		}
 		for _, hdr := range m.hdrs {
-			if !contains(libRule.hdrs, hdr) {
+			if !anyDeclares(func(r *buildRule) []string { return r.hdrs }, hdr) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-hdr", hdr})
 			}
 		}
 		for _, dep := range m.deps {
-			if !hasDepLabel(libRule.deps, dep) {
+			found := false
+			for _, r := range libRules {
+				if hasDepLabel(r.deps, dep) {
+					found = true
+					break
+				}
+			}
+			if !found {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-dep", dep})
 			}
 		}
 		for _, def := range m.defines {
-			if !contains(libRule.defines, def) {
+			if !anyDeclares(func(r *buildRule) []string { return r.defines }, def) {
 				findings = append(findings, finding{dirOrEmpty(dir), "missing-define", def})
 			}
 		}
@@ -732,6 +759,12 @@ func validateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 // cmdBazelGenerateCC is the C/C++ entry: dry-run discovery, depfile
 // capture, BUILD generation, then validation.
 func cmdBazelGenerateCC(wd string, validateOnly bool) {
+	// make's $(CURDIR) and os.Getwd can disagree through symlinks
+	// (macOS: /tmp vs /private/tmp) — relativize against the resolved
+	// physical path or every observed path stays absolute
+	if resolved, err := filepath.EvalSymlinks(wd); err == nil {
+		wd = resolved
+	}
 	dry := []string{"make", "-Bn"}
 	if env := os.Getenv("BRINE_CC_DRY"); env != "" {
 		dry = splitCommand(env)

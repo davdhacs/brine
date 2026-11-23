@@ -9,13 +9,13 @@ import (
 
 func TestIsSHA256Key(t *testing.T) {
 	cases := map[string]bool{
-		"bbd289fab1da72f468ae53c4591860b3a3a7eca1":       false, // ccache sha1 (40 hex)
-		"94/73c76354318a45b9c99451fac8e55044c8387b":      false, // ccache xx/ layout
-		"6d121acbc2cf2dccbd6e2b304f60849dc905e3eff63e38d028cbaaea5eb9fe93": true, // sha256
-		"":                     false,
-		"short":                false,
+		"bbd289fab1da72f468ae53c4591860b3a3a7eca1":                         false, // ccache sha1 (40 hex)
+		"94/73c76354318a45b9c99451fac8e55044c8387b":                        false, // ccache xx/ layout
+		"6d121acbc2cf2dccbd6e2b304f60849dc905e3eff63e38d028cbaaea5eb9fe93": true,  // sha256
+		"":      false,
+		"short": false,
 		"6D121ACBC2CF2DCCBD6E2B304F60849DC905E3EFF63E38D028CBAAEA5EB9FE93": false, // uppercase
-		"zz121acbc2cf2dccbd6e2b304f60849dc905e3eff63e38d028cbaaea5eb9fe93":  false, // non-hex
+		"zz121acbc2cf2dccbd6e2b304f60849dc905e3eff63e38d028cbaaea5eb9fe93": false, // non-hex
 	}
 	for key, want := range cases {
 		if got := isSHA256Key(key); got != want {

@@ -7,10 +7,10 @@ import (
 
 func TestSplitCommand(t *testing.T) {
 	cases := map[string][]string{
-		`cc -c -o foo.o foo.c`:            {"cc", "-c", "-o", "foo.o", "foo.c"},
-		`cc -DNAME="a b" -c x.c -o x.o`:   {"cc", "-DNAME=a b", "-c", "x.c", "-o", "x.o"},
-		`ar rcs libfoo.a a.o b.o`:         {"ar", "rcs", "libfoo.a", "a.o", "b.o"},
-		`single`:                          {"single"},
+		`cc -c -o foo.o foo.c`:          {"cc", "-c", "-o", "foo.o", "foo.c"},
+		`cc -DNAME="a b" -c x.c -o x.o`: {"cc", "-DNAME=a b", "-c", "x.c", "-o", "x.o"},
+		`ar rcs libfoo.a a.o b.o`:       {"ar", "rcs", "libfoo.a", "a.o", "b.o"},
+		`single`:                        {"single"},
 	}
 	for line, want := range cases {
 		got := splitCommand(line)
