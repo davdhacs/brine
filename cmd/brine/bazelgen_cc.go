@@ -919,11 +919,19 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 	}
 	for hdir, hdrs := range hdrOnlyPkgs {
+		// package-relative hdrs
+		rel := make([]string, len(hdrs))
+		for i, h := range hdrs {
+			rel[i] = h
+			if hdir != "" {
+				rel[i] = strings.TrimPrefix(h, hdir+"/")
+			}
+		}
 		var b strings.Builder
 		b.WriteString("load(\"@rules_cc//cc:defs.bzl\", \"cc_library\")\n\n")
 		b.WriteString("cc_library(\n")
 		fmt.Fprintf(&b, "    name = %q,\n", ccLibName(hdir))
-		writeSortedStrings(&b, "hdrs", dedup(hdrs))
+		writeSortedStrings(&b, "hdrs", dedup(rel))
 		b.WriteString("    visibility = [\"//visibility:public\"],\n")
 		b.WriteString(")\n")
 		buildDir := hdir
@@ -932,7 +940,7 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 		}
 		os.WriteFile(filepath.Join(wd, buildDir, "BUILD.bazel"), []byte(b.String()), 0o644)
 		// register in dirLibs so dep resolution finds it
-		dirLibs[hdir] = append(dirLibs[hdir], &ccLibrary{Dir: hdir, Name: ccLibName(hdir), Hdrs: dedup(hdrs)})
+		dirLibs[hdir] = append(dirLibs[hdir], &ccLibrary{Dir: hdir, Name: ccLibName(hdir), Hdrs: dedup(rel)})
 	}
 
 	// headers referenced by OTHER packages' compiles but read by no
