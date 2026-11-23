@@ -1270,6 +1270,14 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 							addDep(ccLabel(lib.Dir, lib.Name))
 						}
 					}
+					// the dominant always joins the bundle: marker
+					// mis-attribution can drop its objects from the
+					// producers list, and its alwayslink guarantees the
+					// package's full member set (sha512 et al.)
+					rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
+					if primary := primaryLibForDir(dirLibs, rdir); primary != nil {
+						addDep(ccLabel(rdir, primary.Name))
+					}
 					continue
 				}
 				rdir := resolvePkgDir(dirLibs, filepath.ToSlash(filepath.Dir(refPath)))
