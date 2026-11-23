@@ -1165,6 +1165,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 					if !contains(srcList, src) {
 						srcList = append(srcList, src)
 					}
+					for _, h := range srcHdrs {
+						if !contains(srcList, h) {
+							srcList = append(srcList, h) // headers as inputs
+						}
+					}
 					for _, d := range c.Defines {
 						if !contains(srcDefines, d) {
 							srcDefines = append(srcDefines, d)
@@ -1207,9 +1212,8 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			if len(srcList) > 0 && len(srcDefines) > 0 {
 				writeSortedStrings(&b, "defines", srcDefines)
 			}
-			if len(srcList) > 0 && len(srcHdrs) > 0 {
-				writeSortedStrings(&b, "hdrs", srcHdrs)
-			}
+			_ = srcHdrs // headers go in srcs: cc_binary has no hdrs attr,
+			// but .h files listed in srcs are declared as compile inputs
 			if len(depList) > 0 {
 				writeOrderedStrings(&b, "deps", depList)
 			}
