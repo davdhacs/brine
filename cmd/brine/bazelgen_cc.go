@@ -1145,6 +1145,11 @@ func generateCCBuilds(compiles []ccCompile, links []ccLink, wd string) []finding
 			// the middle of the binary rule)
 			b.WriteString("cc_binary(\n")
 			fmt.Fprintf(&b, "    name = %q,\n", filepath.Base(l.Out))
+			if debug {
+				for _, d := range depList {
+					fmt.Fprintf(os.Stderr, "[cc-debug] binary %s dep %s\n", filepath.Base(l.Out), d)
+				}
+			}
 			if len(depList) > 0 {
 				writeOrderedStrings(&b, "deps", depList)
 			}
