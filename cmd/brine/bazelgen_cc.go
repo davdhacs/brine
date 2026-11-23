@@ -408,7 +408,12 @@ func captureDepfiles(compiles []ccCompile, wd string) error {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("depfile capture for %s: %v\nargv: %s\n%s", c.Src, err, strings.Join(args, " "), out)
 		}
-		c.Headers = depfiles.Parse(depFile, wd)
+		c.Headers = depfiles.Parse(depFile, c.CtxDir)
+		// depfile paths are relative to the COMPILE's directory (the make
+		// context), not the project root: convert to project-relative
+		for i, h := range c.Headers {
+			c.Headers[i] = relTo(wd, joinCtx(c.CtxDir, h))
+		}
 		// drop the source itself from headers (Parse excludes the target
 		// only when it matches the depfile target; with -MF redirect the
 		// target differs, so filter here)
@@ -488,7 +493,11 @@ func captureLinkSourceDepfiles(links []ccLink, wd string) error {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return fmt.Errorf("link-source depfile capture for %s: %v\nargv: %s\n%s", src, err, strings.Join(args, " "), out)
 			}
-			l.SrcHeaders[src] = depfiles.Parse(depFile, wd)
+			headers := depfiles.Parse(depFile, l.CtxDir)
+			for i, h := range headers {
+				headers[i] = relTo(wd, joinCtx(l.CtxDir, h))
+			}
+			l.SrcHeaders[src] = headers
 			si++
 		}
 	}
