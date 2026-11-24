@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,6 +73,19 @@ type ghaGetDLResp struct {
 	MatchedKey        string `json:"matched_key"`
 }
 
+// twirpError carries the twirp error envelope so callers can branch
+// on code (e.g. already_exists = dedup, not failure).
+type twirpError struct {
+	Method string
+	Status int
+	Code   string
+	Msg    string
+}
+
+func (e *twirpError) Error() string {
+	return fmt.Sprintf("gha %s: HTTP %d: %s: %s", e.Method, e.Status, e.Code, e.Msg)
+}
+
 // ghaTwirp POSTs one twirp JSON RPC and decodes the response.
 func (r *Remote) ghaTwirp(method string, req any, out any) error {
 	body, err := json.Marshal(req)
@@ -92,7 +106,15 @@ func (r *Remote) ghaTwirp(method string, req any, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 400))
-		return fmt.Errorf("gha %s: HTTP %d: %s", method, resp.StatusCode, b)
+		var te twirpError
+		te.Method, te.Status = method, resp.StatusCode
+		if json.Unmarshal(b, &struct {
+			Code *string `json:"code"`
+			Msg  *string `json:"msg"`
+		}{&te.Code, &te.Msg}) != nil || te.Code == "" {
+			te.Msg = string(b)
+		}
+		return &te
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("gha %s: decode: %w", method, err)
@@ -120,10 +142,16 @@ func (r *Remote) ghaBlobPut(sasURL string, body []byte) error {
 
 // ghaCreate reserves a cache entry. Returns (uploadURL, created,
 // err): created=false means the key already exists (immutable — the
-// PutIfNotExist primitive).
+// PutIfNotExist primitive). The service signals duplicates BOTH as
+// 200+ok=false AND as HTTP 409 already_exists (found live: the
+// finalized-entry form is the 409) — both map to created=false.
 func (r *Remote) ghaCreate(key string) (string, bool, error) {
 	var resp ghaCreateResp
 	if err := r.ghaTwirp("CreateCacheEntry", ghaCreateReq{Key: key, Version: r.ghaVer}, &resp); err != nil {
+		var te *twirpError
+		if errors.As(err, &te) && (te.Code == "already_exists" || te.Status == http.StatusConflict) {
+			return "", false, nil
+		}
 		return "", false, err
 	}
 	if !resp.OK {

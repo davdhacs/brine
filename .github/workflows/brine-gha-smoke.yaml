@@ -34,11 +34,13 @@ jobs:
 
       - name: Verify the receipt landed in the GHA cache
         run: |
+          # NOTE: the caches listing API refreshes every ~5 minutes —
+          # a fresh entry may not appear here yet. Informational only;
+          # the warm-hit step below is the authoritative proof.
           N=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
             "https://api.github.com/repos/davdhacs/brine/actions/caches?key=store/" \
             | python3 -c 'import json,sys; print(json.load(sys.stdin).get("total_count",0))')
-          echo "cache entries with store/ prefix: $N"
-          test "$N" -gt 0 || { echo "FAIL: no store/ entries in the GHA cache"; exit 1; }
+          echo "cache entries with store/ prefix (5-min-refreshed view): $N"
 
       - name: Wipe local store, warm run must hit the remote
         run: |
