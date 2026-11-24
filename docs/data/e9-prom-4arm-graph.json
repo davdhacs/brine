@@ -1,0 +1,163 @@
+{
+  "experiment": "E9-prometheus-4arm",
+  "date": "2026-11-24",
+  "project": "prometheus/prometheus",
+  "language": "Go",
+  "build_command": "go build -o prometheus ./cmd/prometheus",
+  "binary_size_bytes": 143000000,
+  "commits": [
+    {
+      "commit": "03bfb64967f3a24e87f8709cfec182500eb3875e",
+      "files_changed": 13,
+      "index": 10,
+      "arm_a_ms": 177628,
+      "arm_b_ms": 0,
+      "arm_b_binary_hit": true,
+      "arm_c_ms": 161865,
+      "arm_d_ms": 361146
+    },
+    {
+      "commit": "2b311b9762bb5834a17374fcf45a8e5b2043293f",
+      "files_changed": 3,
+      "index": 9,
+      "arm_a_ms": 9404,
+      "arm_b_ms": 7782,
+      "arm_c_ms": 16800,
+      "arm_d_ms": 28387
+    },
+    {
+      "commit": "6c2b2964430415546ce92835244bfd9fdcddf95c",
+      "files_changed": 1,
+      "index": 8,
+      "arm_a_ms": 18157,
+      "arm_b_ms": 18443,
+      "arm_c_ms": 14597,
+      "arm_d_ms": 43230
+    },
+    {
+      "commit": "06170caaea449ce139982c9ca9ddb5bf499ad488",
+      "files_changed": 2,
+      "index": 7,
+      "arm_a_ms": 22843,
+      "arm_b_ms": 20678,
+      "arm_c_ms": 24071,
+      "arm_d_ms": 75683
+    },
+    {
+      "commit": "ae44e72eb7646f4c5ae428cfa237d55850150624",
+      "files_changed": 4,
+      "index": 6,
+      "arm_a_ms": 19257,
+      "arm_b_ms": 20672,
+      "arm_c_ms": 15357,
+      "arm_d_ms": 52411
+    },
+    {
+      "commit": "f1486b6753663ba3f49a3c75c21c6bf93ff304b2",
+      "files_changed": 2,
+      "index": 5,
+      "arm_a_ms": 17823,
+      "arm_b_ms": 14672,
+      "arm_c_ms": 24884,
+      "arm_d_ms": 81065
+    },
+    {
+      "commit": "a630a4c4fe812a402ea3a10566c353dd20cc01ee",
+      "files_changed": 2,
+      "index": 4,
+      "arm_a_ms": 25529,
+      "arm_b_ms": 27297,
+      "arm_c_ms": 21769,
+      "arm_d_ms": 76508
+    },
+    {
+      "commit": "99581e6d1c89a0425232b73a663cc434e25482c4",
+      "files_changed": 5,
+      "index": 3,
+      "arm_a_ms": 14614,
+      "arm_b_ms": 25783,
+      "arm_c_ms": 26046,
+      "arm_d_ms": 43814
+    },
+    {
+      "commit": "a5022ef622b4718c3dda1291c1e641fbed44c607",
+      "files_changed": 4,
+      "index": 2,
+      "arm_a_ms": 16180,
+      "arm_b_ms": 14944,
+      "arm_c_ms": 15785,
+      "arm_d_ms": 74278
+    },
+    {
+      "commit": "ad8f26eed18a6aabfd9729bb281c6a3e53beabe9",
+      "files_changed": 1,
+      "index": 1,
+      "arm_a_ms": 25051,
+      "arm_b_ms": 16333,
+      "arm_c_ms": 16228,
+      "arm_d_ms": 35194
+    }
+  ],
+  "stats": {
+    "a": {
+      "label": "actions_cache",
+      "n": 9,
+      "median_s": 18.2,
+      "mean_s": 18.8,
+      "min_s": 9.4,
+      "max_s": 25.5
+    },
+    "b": {
+      "label": "cache_plus_binary",
+      "n": 9,
+      "median_s": 18.4,
+      "mean_s": 18.5,
+      "min_s": 7.8,
+      "max_s": 27.3
+    },
+    "c": {
+      "label": "brine_gocache",
+      "n": 9,
+      "median_s": 16.8,
+      "mean_s": 19.5,
+      "min_s": 14.6,
+      "max_s": 26.0
+    },
+    "d": {
+      "label": "brine_receipt",
+      "n": 9,
+      "median_s": 52.4,
+      "mean_s": 56.7,
+      "min_s": 28.4,
+      "max_s": 81.1
+    }
+  },
+  "cold_start": {
+    "a": 177.628,
+    "b": 0.0,
+    "c": 161.865,
+    "d": 361.146
+  },
+  "calibration": {
+    "a": {
+      "median_ms": 19985,
+      "min_ms": 15860,
+      "max_ms": 24831
+    },
+    "b": {
+      "median_ms": 19427,
+      "min_ms": 17152,
+      "max_ms": 26227
+    },
+    "c": {
+      "median_ms": 19611,
+      "min_ms": 17067,
+      "max_ms": 24922
+    },
+    "d": {
+      "median_ms": 18902,
+      "min_ms": 15074,
+      "max_ms": 24484
+    }
+  }
+}
