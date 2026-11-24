@@ -44,9 +44,32 @@ Three testable sub-claims:
 
 ### Claims → experiments → status
 
+**Demonstration projects (decided 2025-11-23): the evaluation runs
+on PUBLIC, POPULAR projects with REPORTED/optimized CI — not on our
+own testbeds. "Project X, famous for build investment, still gets
+N×" beats "our toy got faster."**
+
+Primary: **Linux kernel** (make; THE canonical build benchmark;
+Phoronix `build-linux-kernel` has 2,330+ public results to anchor
+our cold-build baseline as "normal for the hardware"; public ccache
+studies = related work AND baseline; in nixpkgs for the Nix
+comparison; eorlov.org documents kernel+ccache numbers).
+Secondary: **LLVM/Clang** (cmake — the collector path; Phoronix
+`build-llvm` 905+ public results; large C++).
+Tertiary (language spread, existing): prometheus (Go), collector
+(Docker'd cmake), sqlite/curl (tarball/no-VCS), k8swatch.
+
+The CI-variance angle (from public data): the same kernel build
+took 27m23s on GitHub Actions vs 9m03s on comparable vCPUs
+elsewhere — CI build time is not just slow, it is NONDETERMINISTIC
+across infrastructure. Receipt hits are a constant
+(content-addressed download), independent of machine — a claim no
+build system makes. Fold into C2 as: "deterministic build time."
+
 | # | experiment | demonstrates | status |
 |---|-----------|--------------|--------|
-| E1 | End-to-end acceleration: cold / warm / 1-file-change on N real projects (sqlite, curl, prometheus, collector, StackRox central, k8swatch, fact/zed for language spread) | C2 | HAVE single runs (collector 21m→1.1s; prometheus 197s→1.9s; sqlite 9s→76ms; StackRox CA 10.4m→0.6m). NEED: repeated runs (n≥5, median+IQR), fixed machine specs documented, same-machine baselines. |
+| **E9** | **Public CI replay (headline)**: pick a project with publicly visible per-commit CI timings; replay the SAME commits through brine; report per-commit: their public CI time vs our cold vs our warm receipt. Methodology mirrors the StackRox 70/70 history replay but with an EXTERNAL public baseline — "their CI says X per commit (public data); the same commits through receipts take Y." | C2 + the CI-variance claim | DATA SOURCE VALIDATED: GitHub Actions REST API exposes per-commit → per-workflow → per-JOB → per-STEP durations publicly (no auth; 60 req/hr unauth, 5k authed). curl: 32 jobs/workflow, 0.5-7.8 min each. NEED: scrape N commits of curl's Linux (autotools) workflow + replay through brine on tone; optionally LLVM (big numbers, expensive replay). Hardware confound documented via our own cold baseline on the same commits. |
+| E1 | End-to-end acceleration: cold / warm / 1-file-change on the kernel + LLVM (public projects, Phoronix-anchored baselines) + the existing case-study spread | C2 | NEED: kernel + LLVM runs on tone (32-thread 7950X3D, 74GB free — kernel fits, LLVM tight). HAVE the case-study numbers. Both need repeated runs (n≥5, median+IQR) and the public-data comparison row. NOTE: Phoronix build-linux-kernel/build-llvm are COLD-build hardware benchmarks (2,330+/905+ public results) — they anchor our cold baseline as "normal for the hardware" but contain NO warm-cache data (nobody publishes warm-cache benchmarks — itself a motivating observation for the paper). Kernel on tone: GCC 16.2 vs kernel 6.12 EFI-stub C23 errors — use kernel 6.19 or -std=gnu17; cold defconfig build measured 57s @ 32 threads (fast machine, small config — consider allmodconfig for a longer baseline or accept it). |
 | E2 | Ground-truth gate: replay real project history, fresh build vs receipt restore, byte-identity for every output | C1 | HAVE StackRox master 70/70 green (CA system); brine tamper/regression tests. NEED: port the history-replay harness to brine receipts; ≥100 commits of ≥2 projects. |
 | E3 | Adversarial evaluation: attack the cache (poisoned blob, truncated blob, stale-mtime serve, 0-blob overwrite, env flip, builder-image swap) — detection/rejection rates | C3 | HAVE the mechanisms (serve PUT hash check 400s; verify-on-restore; divergence detector; key_env advisories; execenv keying; 0-blob guards) + the live poisoning incident as motivating case study. NEED: consolidated single table, each attack × each layer, pass/fail. Some attacks lack measurements (e.g., truncation detection timing). |
 | E4 | Baseline comparison: brine vs Nix binary cache vs tup vs ccache(+remote) vs plain rebuild vs GitHub-Actions-cache-style blob upload, same projects, same machine | C2, C1 | HAVE ccache 100% through serve; Bazel 969/969 actions through serve; plain-rebuild numbers. MISSING: Nix and tup entirely. NEED: Nix binary-cache warm/cold/delta on 2+ case-study projects (all are in nixpkgs); tup on one C project (needs Tupfiles written — itself evidence for the adoption-cost claim). |
