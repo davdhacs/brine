@@ -49,6 +49,7 @@ jobs:
           export CCACHE_DIR=/tmp/ccache-test
           export CCACHE_REMOTE_STORAGE="http://localhost:7899"
           export CC="ccache gcc"
+          export CCACHE_COMPILERCHECK=content
           echo 'int main(){return 0;}' > /tmp/diag-test.c
           rm -rf /tmp/ccache-test
           
@@ -57,9 +58,10 @@ jobs:
           ccache gcc -c /tmp/diag-test.c -o /tmp/diag-test.o
           ccache --show-stats | grep -E "hit|miss|error" | head -6
           
-          echo "=== second compile (warm — should hit) ==="
+          echo "=== second compile after clearing LOCAL cache (cross-runner simulation) ==="
           rm /tmp/diag-test.o
-          ccache gcc -c /tmp/diag-test.c -o /tmp/diag-test.o
+          rm -rf /tmp/ccache-test/*
+          CCACHE_COMPILERCHECK=content ccache gcc -c /tmp/diag-test.c -o /tmp/diag-test.o
           ccache --show-stats | grep -E "hit|miss|error" | head -6
           
           echo "=== serve request log ==="
