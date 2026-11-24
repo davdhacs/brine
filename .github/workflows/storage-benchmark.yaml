@@ -96,6 +96,8 @@ jobs:
           # --- protocol verification ---
           KEY="brinebench-verify-$GITHUB_RUN_ID"
           R1=$(twirp CreateCacheEntry "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+          printf 'DEBUG create_raw=%s\n' "$(printf %s "$R1" | head -c 400)"
+          printf 'DEBUG results_host=%s\n' "$(printf %s "$ACTIONS_RESULTS_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
           VURL=$(printf %s "$R1" | jget signed_upload_url)
           SZB=$(stat -c%s payload_1MB.bin)
           if [ -n "$VURL" ]; then
