@@ -1,0 +1,215 @@
+name: storage-benchmark
+# E10 verification checklist + E10b throughput comparison:
+# GHA cache vs artifact v4 vs Azure Blob, from the same runner.
+# Records CPU/instance per run; multiple dispatches sample the fleet.
+on:
+  workflow_dispatch:
+    inputs:
+      reps:
+        description: 'reps per payload size per path'
+        default: '3'
+
+permissions:
+  actions: write  # cache + artifact cleanup via API
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      REPS: ${{ inputs.reps || '3' }}
+    steps:
+      - name: Runner record
+        run: |
+          mkdir -p bench && cd bench
+          {
+            echo "date_utc=$(date -u +%FT%TZ)"
+            grep -m1 'model name' /proc/cpuinfo
+            echo "nproc=$(nproc)"
+            lscpu | grep -E 'Model name|^CPU\(s\)|max MHz|min MHz' || true
+            echo "hostname=$(cat /etc/hostname)"
+            echo "cache_url_host=$(printf %s "$ACTIONS_CACHE_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
+            echo "runtime_url_host=$(printf %s "$ACTIONS_RUNTIME_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
+          } | tee runner.txt
+
+      - name: CPU calibration probe (pinned sqlite amalgamation compile)
+        run: |
+          cd bench
+          if curl -sSfLO https://sqlite.org/2024/sqlite-amalgamation-3450100.zip 2>/dev/null; then
+            unzip -q sqlite-amalgamation-3450100.zip
+            cd sqlite-amalgamation-3450100
+            for i in 1 2 3; do
+              rm -f sqlite3.o
+              S=$(date +%s%3N); gcc -O2 -c sqlite3.c; E=$(date +%s%3N)
+              echo "calib_ms=$((E-S))"
+            done | tee ../calib.txt
+          else
+            echo "calib_ms=skipped" | tee calib.txt
+          fi
+
+      - name: Cache protocol verification + throughput
+        run: |
+          set -e
+          cd bench
+          for sz in 1 10 100; do
+            dd if=/dev/urandom of=payload_${sz}MB.bin bs=1M count=$sz status=none
+          done
+          BASE="${ACTIONS_CACHE_URL}"
+          AUTH="Authorization: Bearer ${ACTIONS_RUNTIME_TOKEN}"
+          VER="brinebench-v1"
+
+          cache_put() { # key file -> echoes nothing; sets PUT_MS
+            local key=$1 file=$2
+            local szb=$(stat -c%s "$file")
+            local id
+            id=$(curl -s -X POST "${BASE}_apis/artifactcache/caches" \
+              -H "$AUTH" -H 'Content-Type: application/json' \
+              -d "{\"key\":\"$key\",\"version\":\"$VER\"}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["cacheID"])')
+            local S=$(date +%s%3N)
+            curl -s -o /dev/null -X PATCH "${BASE}_apis/artifactcache/caches/$id" \
+              -H "$AUTH" -H "Content-Range: bytes 0-$((szb-1))/$szb" \
+              --data-binary @"$file"
+            curl -s -o /dev/null -X POST "${BASE}_apis/artifactcache/caches/$id" \
+              -H "$AUTH" -H 'Content-Type: application/json' -d "{\"size\":$szb}"
+            local E=$(date +%s%3N)
+            PUT_MS=$((E-S))
+          }
+
+          cache_lookup_url() { # key -> echoes download url
+            curl -s "${BASE}_apis/artifactcache/cache?keys=$1&version=$VER" -H "$AUTH" \
+              | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r.get("archive_download_url") or r.get("archiveLocation") or "")'
+          }
+
+          # --- protocol verification ---
+          KEY="brinebench-verify-$GITHUB_RUN_ID"
+          SZB=$(stat -c%s payload_1MB.bin)
+          RES=$(curl -s -X POST "${BASE}_apis/artifactcache/caches" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+          VID=$(printf %s "$RES" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cacheID"])')
+          DUP=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}_apis/artifactcache/caches" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+          UP=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "${BASE}_apis/artifactcache/caches/$VID" -H "$AUTH" -H "Content-Range: bytes 0-$((SZB-1))/$SZB" --data-binary @payload_1MB.bin)
+          FIN=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}_apis/artifactcache/caches/$VID" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"size\":$SZB}")
+          LOOK=$(curl -s "${BASE}_apis/artifactcache/cache?keys=$KEY&version=$VER" -H "$AUTH")
+          printf 'VERIFY reserve_dup=%s patch=%s finalize=%s\n' "$DUP" "$UP" "$FIN"
+          printf '%s' "$LOOK" | python3 -c '
+          import json,sys
+          from urllib.parse import urlparse, parse_qsl
+          try: r=json.load(sys.stdin)
+          except Exception: print("VERIFY lookup=parse-fail"); raise SystemExit
+          print("VERIFY lookup_fields=%s" % sorted(r.keys()))
+          url = r.get("archive_download_url") or r.get("archiveLocation") or ""
+          if url:
+              u = urlparse(url)
+              print("VERIFY dl_host=%s" % u.netloc)
+              print("VERIFY sas_params=%s" % sorted(p for p,_ in parse_qsl(u.query)))
+          ' || true
+          DL=$(cache_lookup_url "$KEY")
+          if [ -n "$DL" ]; then
+            RG=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 "$DL")
+            RG2=$(curl -s -o /dev/null -w '%{http_code}' -r $((100*1024*1024))-$((100*1024*1024+1023)) "$DL")
+            printf 'VERIFY range_get_in_range=%s range_get_past_eof=%s\n' "$RG" "$RG2"
+          fi
+
+          # --- throughput: cache path ---
+          for sz in 1 10 100; do
+            for rep in $(seq "$REPS"); do
+              K="brinebench-${sz}MB-$GITHUB_RUN_ID-$rep"
+              cache_put "$K" payload_${sz}MB.bin
+              U=$PUT_MS
+              S=$(date +%s%3N)
+              DL=$(cache_lookup_url "$K")
+              curl -s -o /dev/null "$DL"
+              E=$(date +%s%3N)
+              printf 'RESULT path=cache size=%s rep=%s up_ms=%s dl_ms=%s\n' "$sz" "$rep" "$U" "$((E-S))"
+              # ranged parallel download (4 chunks), 100MB only
+              if [ "$sz" = 100 ]; then
+                S=$(date +%s%3N)
+                SZB=$(stat -c%s payload_100MB.bin)
+                Q=$((SZB/4))
+                for c in 0 1 2 3; do
+                  A=$((c*Q)); B=$(( (c+1)*Q - 1 )); [ $c = 3 ] && B=$((SZB-1))
+                  curl -s -o /dev/null -r $A-$B "$DL" &
+                done
+                wait
+                E=$(date +%s%3N)
+                printf 'RESULT path=cache4x size=%s rep=%s dl_ms=%s\n' "$sz" "$rep" "$((E-S))"
+              fi
+            done
+          done
+
+      - name: Azure Blob throughput (reference)
+        env:
+          AZSAS: ${{ secrets.BRINE_AZURE_SAS }}
+        run: |
+          cd bench
+          AZURL="https://cigocache.blob.core.windows.net/cimemo-bench"
+          # stderr filtered: never leak the SAS into public logs
+          acurl() { curl -s -o /dev/null "$@" 2> >(sed -u "s|$AZSAS|[SAS]|g" >&2); }
+          for sz in 1 10 100; do
+            for rep in $(seq "$REPS"); do
+              S=$(date +%s%3N)
+              acurl -X PUT "$AZURL/run$GITHUB_RUN_ID-${sz}MB-$rep.bin?$AZSAS" \
+                -H 'x-ms-blob-type: BlockBlob' --data-binary @payload_${sz}MB.bin
+              E=$(date +%s%3N); printf 'RESULT path=azure size=%s rep=%s up_ms=%s\n' "$sz" "$rep" "$((E-S))"
+              S=$(date +%s%3N)
+              acurl "$AZURL/run$GITHUB_RUN_ID-${sz}MB-$rep.bin?$AZSAS"
+              E=$(date +%s%3N); printf 'RESULT path=azure size=%s rep=%s dl_ms=%s\n' "$sz" "$rep" "$((E-S))"
+              if [ "$sz" = 100 ]; then
+                S=$(date +%s%3N)
+                SZB=$(stat -c%s payload_100MB.bin); Q=$((SZB/4))
+                for c in 0 1 2 3; do
+                  A=$((c*Q)); B=$(( (c+1)*Q - 1 )); [ $c = 3 ] && B=$((SZB-1))
+                  acurl -r $A-$B "$AZURL/run$GITHUB_RUN_ID-100MB-$rep.bin?$AZSAS" &
+                done
+                wait
+                E=$(date +%s%3N); printf 'RESULT path=azure4x size=%s rep=%s dl_ms=%s\n' "$sz" "$rep" "$((E-S))"
+              fi
+            done
+          done
+
+      - name: Artifact v4 timing mark
+        run: date +%s%3N > bench/t_art_up_start
+
+      - name: Artifact v4 upload (100MB, incumbent client)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-payload-${{ github.run_id }}
+          path: bench/payload_100MB.bin
+          retention-days: 1
+
+      - name: Artifact v4 upload timing + download timing mark
+        run: |
+          E=$(date +%s%3N)
+          printf 'RESULT path=artifact size=100 rep=1 up_ms=%s\n' "$(( E - $(cat bench/t_art_up_start) ))"
+          date +%s%3N > bench/t_art_dl_start
+
+      - name: Artifact v4 download (incumbent client)
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-payload-${{ github.run_id }}
+
+      - name: Artifact download timing + cleanup
+        run: |
+          E=$(date +%s%3N)
+          printf 'RESULT path=artifact size=100 rep=1 dl_ms=%s\n' "$(( E - $(cat bench/t_art_dl_start) ))"
+          # cleanup: our cache entries + artifact (keep quota clean)
+          for id in $(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/davdhacs/brine/actions/caches?key=brinebench" \
+              | python3 -c 'import json,sys; [print(c["id"]) for c in json.load(sys.stdin).get("actions_caches",[])]'); do
+            curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/davdhacs/brine/actions/caches/$id"
+          done
+          echo "cache cleanup done"
+
+      - name: Summary
+        run: |
+          cd bench
+          {
+            echo "## storage-benchmark run $GITHUB_RUN_ID"
+            echo
+            echo '```'
+            cat runner.txt calib.txt 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # machine-readable: harvest via job logs (gh api ... /logs), grep RESULT/VERIFY lines
+          cat runner.txt calib.txt 2>/dev/null
