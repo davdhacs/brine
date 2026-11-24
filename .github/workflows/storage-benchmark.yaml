@@ -30,6 +30,8 @@ jobs:
             echo "hostname=$(cat /etc/hostname)"
             echo "cache_url_host=$(printf %s "$ACTIONS_CACHE_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
             echo "runtime_url_host=$(printf %s "$ACTIONS_RUNTIME_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
+            echo "results_url_host=$(printf %s "$ACTIONS_RESULTS_URL" | sed -E 's#https://([^/]+)/.*#\1#')"
+            echo "actions_env_vars=$(env | grep -oE '^ACTIONS_[A-Z_]+' | sort | tr '\n' ' ')"
           } | tee runner.txt
 
       - name: CPU calibration probe (pinned sqlite amalgamation compile)
@@ -54,6 +56,10 @@ jobs:
           for sz in 1 10 100; do
             dd if=/dev/urandom of=payload_${sz}MB.bin bs=1M count=$sz status=none
           done
+          if [ -z "$ACTIONS_CACHE_URL" ]; then
+            echo "VERIFY cache_v1=ABSENT (v2 migration: no ACTIONS_CACHE_URL on this runner)"
+            exit 0
+          fi
           BASE="${ACTIONS_CACHE_URL}"
           AUTH="Authorization: Bearer ${ACTIONS_RUNTIME_TOKEN}"
           VER="brinebench-v1"
