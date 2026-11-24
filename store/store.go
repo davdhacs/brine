@@ -70,6 +70,7 @@ type Manifest struct {
 	ClosureHash  string            `json:"closure_hash,omitempty"`
 	KeyTail      string            `json:"key_tail,omitempty"`
 	OutputPatterns []string        `json:"output_patterns,omitempty"` // snapshot scope; nil = all outputs
+	Bundles        []BundleRef    `json:"bundles,omitempty"`         // small-blob transport bundles (backend-agnostic)
 }
 
 // Store is the content-addressed blob store with manifests.
@@ -158,6 +159,11 @@ func (s *Store) markBlob(hash string) {}
 // attached, also uploads the manifest and its blobs — this is what
 // makes receipts cross-machine.
 func (s *Store) PutManifest(m *Manifest) error {
+	// bundles must be prepared BEFORE marshaling: both the local copy
+	// and the remote upload carry the index
+	if err := s.prepareBundles(m); err != nil {
+		return fmt.Errorf("bundle prep: %w", err)
+	}
 	m.LastRead = time.Now()
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -230,6 +236,10 @@ func (s *Store) HasManifest(key string) bool {
 // per-blob sha256 verification is unchanged; any integrity failure
 // aborts with the first error (visible by design).
 func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
+	// bundles first: one fetch per bundle instead of one per member
+	if err := s.fetchBundles(m); err != nil {
+		return 0, 0, err
+	}
 	trustLocal := os.Getenv("BRINE_TRUST_LOCAL") == "1"
 	var mu sync.Mutex
 	var count int
@@ -316,7 +326,9 @@ func matchAnyPattern(patterns []string, rel string) bool {
 // `brine restore <key> collector` fetches every output with
 // "collector" in its path without remembering the full layout.
 func (s *Store) RestoreManifestMatching(m *Manifest, dir, pattern string) (int, int64, error) {
-	sub := &Manifest{Key: m.Key, BuiltAt: m.BuiltAt}
+	// carry the bundle index: members of filtered blobs still arrive
+	// via their bundle (one fetch), then the pattern selects files
+	sub := &Manifest{Key: m.Key, BuiltAt: m.BuiltAt, Bundles: m.Bundles}
 	for _, ref := range m.Blobs {
 		if matchAnyPattern([]string{pattern}, ref.Path) {
 			sub.Blobs = append(sub.Blobs, ref)
@@ -482,6 +494,14 @@ func (s *Store) GC(maxAge time.Duration) (int64, int, error) {
 			if json.Unmarshal(data, &m) == nil {
 				for _, ref := range m.Blobs {
 					liveHashes[ref.Hash] = true
+				}
+				// bundles and their members stay reachable with the
+				// manifest that references them
+				for _, b := range m.Bundles {
+					liveHashes[b.Hash] = true
+					for _, h := range b.Members {
+						liveHashes[h] = true
+					}
 				}
 			}
 		}

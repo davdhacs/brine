@@ -40,6 +40,11 @@ func manifestSelfHash(m *Manifest) string {
 // manifests/<key>/<manifest_hash>.json
 // Uses O_EXCL (kernel-enforced first-write-wins on local disk).
 func (s *Store) PutManifestCA(m *Manifest) error {
+	// bundles must be prepared BEFORE the self-hash: the content-
+	// addressed path and the bundle index derive from the same bytes
+	if err := s.prepareBundles(m); err != nil {
+		return fmt.Errorf("bundle prep: %w", err)
+	}
 	// Compute self-hash BEFORE setting LastRead (which changes on each
 	// call — the content-addressed path must be based on the stable
 	// content, not the access timestamp).

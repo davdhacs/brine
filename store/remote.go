@@ -62,9 +62,10 @@ func (s *Store) remoteUploadBlobs(blobs []BlobRef) error {
 }
 
 // remoteUploadManifest pushes the manifest JSON and every referenced
-// blob (content-addressed, If-None-Match dedup).
+// blob (content-addressed, If-None-Match dedup). Small blobs travel
+// as bundles (transportRefs) — the request-count amortization.
 func (s *Store) remoteUploadManifest(m *Manifest) error {
-	if err := s.remoteUploadBlobs(m.Blobs); err != nil {
+	if err := s.remoteUploadBlobs(transportRefs(m)); err != nil {
 		return err
 	}
 	data, err := json.Marshal(m)
@@ -101,8 +102,9 @@ func (s *Store) EnsureRemote(m *Manifest) error {
 	}
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 16)
-	errCh := make(chan error, len(m.Blobs))
-	for _, ref := range m.Blobs {
+	refs := transportRefs(m)
+	errCh := make(chan error, len(refs))
+	for _, ref := range refs {
 		if exists, err := s.remote.ExistsPub(remoteBlobPrefix + ref.Hash); err == nil && exists {
 			continue
 		}
