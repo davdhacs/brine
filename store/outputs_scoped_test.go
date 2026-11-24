@@ -37,7 +37,7 @@ func TestSnapshotOutputsScoped(t *testing.T) {
 	}
 
 	// Unscoped: every artifact.
-	m, err := s.SnapshotOutputs("k-all", dir, readSet, builtAt, nil)
+	m, err := s.SnapshotOutputs("k-all", dir, readSet, builtAt, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestSnapshotOutputsScoped(t *testing.T) {
 	}
 
 	// Scoped to the deliverable: only build/app.
-	m, err = s.SnapshotOutputs("k-scoped", dir, readSet, builtAt, []string{"build/app"})
+	m, err = s.SnapshotOutputs("k-scoped", dir, readSet, builtAt, []string{"build/app"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestSnapshotOutputsScoped(t *testing.T) {
 	}
 
 	// Glob scope.
-	m, err = s.SnapshotOutputs("k-glob", dir, readSet, builtAt, []string{"*.o"})
+	m, err = s.SnapshotOutputs("k-glob", dir, readSet, builtAt, []string{"*.o"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestSnapshotOutputsScoped(t *testing.T) {
 	}
 
 	// Scoped pattern that matches nothing the build produced.
-	m, err = s.SnapshotOutputs("k-none", dir, readSet, builtAt, []string{"nonexistent"})
+	m, err = s.SnapshotOutputs("k-none", dir, readSet, builtAt, []string{"nonexistent"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

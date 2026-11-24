@@ -13,8 +13,12 @@ import (
 
 // SnapshotOutputs stores ONLY the files a build produced: files that
 // (a) are not in the input read-set, and (b) were created or modified
-// after builtAt. Everything else — user source, files edited before the
-// build — is excluded, so restoring can never clobber user files.
+// after builtAt OR observed written by the write-tracker. The write
+// set matters because installers PRESERVE SOURCE MTIMES (cmake
+// --install copies headers with the original 2024 tarball timestamps)
+// — mtime alone silently drops them from the receipt (found live:
+// the dep receipt restored libs but no headers, and the dependent
+// build failed on the missing include).
 //
 // This is the correctness-critical distinction from SnapshotDir (which
 // captured the whole tree and, on a warm hit, overwrote non-input
@@ -25,7 +29,7 @@ import (
 // Semantics match restore: substring on the relative path, or
 // filepath.Match glob when the pattern contains * ? [. The default
 // (nil) keeps every output — full incremental-rebuild state.
-func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64, outputPatterns []string) (*Manifest, error) {
+func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64, outputPatterns []string, written map[string]bool) (*Manifest, error) {
 	inputs := make(map[string]bool, len(readSet))
 	for _, f := range readSet {
 		inputs[filepath.ToSlash(f)] = true
@@ -77,8 +81,11 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 		if inputs[rel] && info.ModTime().UnixNano() <= builtAt {
 			return nil
 		}
-		// Rule (b): only files the build touched.
-		if info.ModTime().UnixNano() <= builtAt {
+		// Rule (b): only files the build touched — by mtime OR by the
+		// write-tracker. Installers that preserve source mtimes (cmake
+		// --install) otherwise drop copied files (headers!) from the
+		// receipt while capturing the freshly-compiled libs.
+		if info.ModTime().UnixNano() <= builtAt && !written[rel] {
 			return nil
 		}
 		// Scoped snapshot: only deliverables matching the patterns.

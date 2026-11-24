@@ -35,7 +35,7 @@ func TestSnapshotOutputsOutputOnly(t *testing.T) {
 	s, _ := New(filepath.Join(dir, ".brine"))
 
 	readSet := []string{"input.go"}
-	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, nil)
+	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestSnapshotOutputsOutputOnly(t *testing.T) {
 func TestRestoreVerifiesBlobIntegrity(t *testing.T) {
 	dir, builtAt := snapshotFixture(t)
 	s, _ := New(filepath.Join(dir, ".brine"))
-	m, err := s.SnapshotOutputs("k", dir, []string{"input.go"}, builtAt, nil)
+	m, err := s.SnapshotOutputs("k", dir, []string{"input.go"}, builtAt, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestValidateIgnoresOutputDirListings(t *testing.T) {
 	// After filterBuildState, read-sets exclude output-tree entries
 	// (fact case study: cargo fingerprint state is not an input).
 	readSet := []string{"input.go"}
-	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, nil)
+	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestValidateRootDirListing(t *testing.T) {
 	dir, builtAt := snapshotFixture(t)
 	s, _ := New(filepath.Join(dir, ".brine"))
 	readSet := []string{"input.go"}
-	m, _ := s.SnapshotOutputs("k", dir, readSet, builtAt, nil)
+	m, _ := s.SnapshotOutputs("k", dir, readSet, builtAt, nil, nil)
 	m.BuiltAt = builtAt
 	m.ReadSet = readSet
 	outputDirs := map[string]bool{"out": true}
@@ -173,12 +173,12 @@ func TestLatestForClosure(t *testing.T) {
 	s, _ := New(filepath.Join(dir, ".brine"))
 	readSet := []string{"input.go"}
 
-	m1, _ := s.SnapshotOutputs("k1", dir, readSet, builtAt, nil)
+	m1, _ := s.SnapshotOutputs("k1", dir, readSet, builtAt, nil, nil)
 	m1.ClosureHash = "closureX"
 	m1.Command = "build"
 	s.PutManifest(m1)
 
-	m2, _ := s.SnapshotOutputs("k2", dir, readSet, builtAt, nil)
+	m2, _ := s.SnapshotOutputs("k2", dir, readSet, builtAt, nil, nil)
 	m2.ClosureHash = "closureX"
 	m2.Command = "build"
 	s.PutManifest(m2)

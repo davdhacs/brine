@@ -678,7 +678,7 @@ func cmdMemoize(args []string, forceFull bool) {
 			m.ImageOutputs = append(m.ImageOutputs, store.ImageRef{ImageID: id, Tag: tag})
 		}
 	} else {
-		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns)
+		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns, writtenSet)
 		if err != nil {
 			fatal("snapshot: %v", err)
 		}
@@ -1454,6 +1454,13 @@ func cmdRecord(args []string) {
 
 	// read-set discovery (same as cmdMemoize)
 	var readSet []string
+	var writtenSet map[string]bool
+	if writesActive {
+		writtenSet = map[string]bool{}
+		for _, f := range writes.Files(wd) {
+			writtenSet[f] = true
+		}
+	}
 	if isDocker {
 		readSet = dockerContextClosure(wd, args)
 	} else if isGo {
@@ -1462,13 +1469,6 @@ func cmdRecord(args []string) {
 			fatal("closure: %v", err)
 		}
 	} else {
-		var writtenSet map[string]bool
-		if writesActive {
-			writtenSet = map[string]bool{}
-			for _, f := range writes.Files(wd) {
-				writtenSet[f] = true
-			}
-		}
 		filterWrites := func(files []string) []string {
 			if writtenSet == nil {
 				return files
@@ -1520,7 +1520,7 @@ func cmdRecord(args []string) {
 			}
 		}
 	} else {
-		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns)
+		m, err = st.SnapshotOutputs(k, wd, readSet, builtAt, loadConfig(wd).OutputPatterns, writtenSet)
 		if err != nil {
 			fatal("snapshot: %v", err)
 		}
