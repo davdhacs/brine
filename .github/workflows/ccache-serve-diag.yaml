@@ -1,0 +1,64 @@
+name: ccache-serve-diag
+# Diagnose why ccache through serve shows 0 hits on GHA:
+# test each layer independently with verbose output.
+on: workflow_dispatch
+
+permissions:
+  actions: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - name: Build brine
+        run: go build -o /usr/local/bin/brine ./cmd/brine
+
+      - uses: ./.github/actions/env-bootstrap
+
+      - name: Diagnose serve + ccache
+        run: |
+          set -x
+          # Layer 1: does the env have what serve needs?
+          echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:+SET}"
+          echo "ACTIONS_RUNTIME_TOKEN=${ACTIONS_RUNTIME_TOKEN:+SET}"
+          echo "BRINE_GOCACHE_REMOTE=${BRINE_GOCACHE_REMOTE:-unset}"
+
+          # Layer 2: does serve start?
+          export BRINE_REMOTE=1 BRINE_GOCACHE_REMOTE=1 BRINE_SERVE_LOG=1
+          nohup brine serve --port 7899 > /tmp/serve.log 2>&1 &
+          SERVE_PID=$!
+          sleep 2
+          echo "serve pid: $SERVE_PID alive: $(kill -0 $SERVE_PID 2>/dev/null && echo yes || echo NO)"
+          cat /tmp/serve.log
+
+          # Layer 3: does serve respond?
+          curl -sv http://localhost:7899/health 2>&1 | tail -5
+          curl -s http://localhost:7899/stats 2>&1 | head -3
+
+          # Layer 4: can serve store/fetch through the GHA backend?
+          TESTKEY="34/testhash1234567890abcdef"
+          echo "test-payload" | curl -s -X PUT -d @- http://localhost:7899/$TESTKEY -w "PUT status: %{http_code}\n"
+          curl -s http://localhost:7899/$TESTKEY -w "\nGET status: %{http_code}\n"
+
+          # Layer 5: does ccache work through serve?
+          export CCACHE_DIR=/tmp/ccache-test
+          export CCACHE_REMOTE_STORAGE="http://localhost:7899"
+          export CC="ccache gcc"
+          echo 'int main(){return 0;}' > /tmp/diag-test.c
+          rm -rf /tmp/ccache-test
+          
+          echo "=== first compile (cold) ==="
+          ccache -C 2>/dev/null
+          ccache gcc -c /tmp/diag-test.c -o /tmp/diag-test.o
+          ccache --show-stats | grep -E "hit|miss|error" | head -6
+          
+          echo "=== second compile (warm — should hit) ==="
+          rm /tmp/diag-test.o
+          ccache gcc -c /tmp/diag-test.c -o /tmp/diag-test.o
+          ccache --show-stats | grep -E "hit|miss|error" | head -6
+          
+          echo "=== serve request log ==="
+          cat /tmp/serve.log | grep -E "GET|PUT|ERROR|error" | head -10
