@@ -31,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 	"os"
 )
 
@@ -196,9 +197,16 @@ func (r *Remote) ghaStore(key string, body []byte) (created bool, err error) {
 	// is enforced at restore time (every fetch hash-verifies); here we
 	// only refuse to reference dead entries. Different content under
 	// the same key is legitimate PutIfNotExist semantics — existing
-	// wins, the caller gets created=false.
-	if verr := r.ghaVerifyEntryLive(key); verr == nil {
-		return false, nil // healthy duplicate — the common case
+	// wins, the caller gets created=false. Retries cover the metadata
+	// propagation lag on just-finalized entries.
+	var verr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+		if verr = r.ghaVerifyEntryLive(key); verr == nil {
+			return false, nil // healthy duplicate — the common case
+		}
 	}
 	// broken existing entry: repair, or refuse to reference it
 	if rerr := r.ghaRepairEntry(key, body); rerr == nil {
@@ -220,13 +228,39 @@ func (r *Remote) ghaPutEntry(sasURL, key string, body []byte) error {
 	if !fin.OK {
 		return fmt.Errorf("gha finalize %s: %s", key, fin.Message)
 	}
-	if err := r.ghaVerifyEntry(key, body); err != nil {
-		// immutable: repair by delete + repush, else fail the upload
+	// range-verify with propagation retries: the cache service's
+	// metadata (entry→blob mapping) is eventually consistent — a
+	// just-finalized entry may not be visible to GetCacheEntryDownloadURL
+	// for a moment (found live: healthy uploads treated as broken,
+	// receipts never shared; the 500ms retry removed with the
+	// full-read-back was protecting exactly this).
+	if err := r.ghaVerifyEntryRetry(key, body); err != nil {
+		// immutable entries cannot be re-written in place — repair by
+		// DELETE (REST, needs the workflow's github.token) + re-create.
+		// NOTE: the REST delete works off the ~5-min index — fresh
+		// entries cannot be deleted; with the retries above, verification
+		// normally passes before repair is attempted.
 		if rerr := r.ghaRepairEntry(key, body); rerr != nil {
 			return fmt.Errorf("gha verify %s: %w (repair unavailable: %v)", key, err, rerr)
 		}
 	}
 	return nil
+}
+
+// ghaVerifyEntryRetry runs ghaVerifyEntry with propagation backoff
+// (500ms, 1s, 2s) — the data plane (Azure Blob) is consistent, but
+// the cache service's entry metadata lags finalize slightly.
+func (r *Remote) ghaVerifyEntryRetry(key string, stored []byte) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+		if err = r.ghaVerifyEntry(key, stored); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // ghaRepairEntry heals a poisoned immutable key: delete the broken
