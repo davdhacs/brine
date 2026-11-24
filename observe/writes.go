@@ -34,6 +34,9 @@ type Writes struct {
 	files  map[string]bool // absolute paths written/created
 	watch  *fsnotify.Watcher
 	active bool
+	root   string
+	dirs   int
+	skip   func(name string) bool
 }
 
 // NewWrites starts a recursive watcher under root (best-effort:
@@ -50,36 +53,46 @@ func NewWrites(root string) *Writes {
 	if err != nil {
 		real = root
 	}
-	dirs := 0
+	w.root = real
 	skip := func(name string) bool {
 		return strings.HasPrefix(name, ".") || name == "vendor" ||
 			name == "node_modules" || name == "target"
 	}
-	filepath.WalkDir(real, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if path != real && skip(d.Name()) {
-			return filepath.SkipDir
-		}
-		if dirs >= maxWatchedDirs {
-			return filepath.SkipAll
-		}
-		if err := fsn.Add(path); err == nil {
-			dirs++
-		}
-		return nil
-	})
-	if dirs == 0 {
+	w.skip = skip
+	w.addTree(real)
+	if w.dirs == 0 {
 		fsn.Close()
 		return w
 	}
 	w.active = true
 	go w.loop(real)
 	return w
+}
+
+// addTree adds watches for dir and every directory under it,
+// respecting the skip rules and the watch cap. Used at startup AND
+// when the build creates new directories (cmake --install makes
+// pkg/mbedtls/include/... mid-build — files written into unwatched
+// new dirs were invisible to the write-tracker, found live).
+func (w *Writes) addTree(dir string) {
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if path != w.root && w.skip(d.Name()) {
+			return filepath.SkipDir
+		}
+		if w.dirs >= maxWatchedDirs {
+			return filepath.SkipAll
+		}
+		if err := w.watch.Add(path); err == nil {
+			w.dirs++
+		}
+		return nil
+	})
 }
 
 func (w *Writes) loop(root string) {
@@ -91,6 +104,14 @@ func (w *Writes) loop(root string) {
 			}
 			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
 				continue
+			}
+			// New directories need watches: files created inside them
+			// after this moment must be tracked (the cmake --install
+			// case: pkg/mbedtls/include/... appears mid-build).
+			if ev.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
+					w.addTree(ev.Name)
+				}
 			}
 			// Only files under root; ignore the watcher's own churn.
 			rel, err := filepath.Rel(root, ev.Name)
