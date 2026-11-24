@@ -26,8 +26,10 @@ func TestSnapshotOutputsHiddenDirUnderScope(t *testing.T) {
 	// the .libs dir itself: old mtime too
 	os.Chtimes(filepath.Dir(so), old, old)
 
-	// scoped: bld/** must capture through the hidden dir
-	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, []string{"bld/**"}, nil)
+	// scoped + write-tracked (the REAL incremental flow: the restore
+	// writes fire the fsnotify tracker): captured through the hidden dir
+	written := map[string]bool{"bld/lib/.libs/libcurl.so": true}
+	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, []string{"bld/**"}, written)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +40,20 @@ func TestSnapshotOutputsHiddenDirUnderScope(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("bld/** must capture the hidden .libs dir contents: %+v", m.Blobs)
+		t.Fatalf("bld/** + write-tracked must capture the hidden .libs contents: %+v", m.Blobs)
+	}
+
+	// scoped but NOT write-tracked (pre-existing old file): the mtime
+	// rule correctly skips it (the scope covers the dir, not the
+	// freshness decision)
+	m1b, err := s.SnapshotOutputs("k1b", dir, readSet, builtAt, []string{"bld/**"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range m1b.Blobs {
+		if b.Path == "bld/lib/.libs/libcurl.so" {
+			t.Fatalf("old-mtime untracked file must be skipped by the mtime rule even under scope")
+		}
 	}
 
 	// unscoped: hidden dir with old mtime still pruned (VCS, caches)
