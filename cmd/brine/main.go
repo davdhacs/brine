@@ -491,12 +491,33 @@ func cmdMemoize(args []string, forceFull bool) {
 	// unchanged sources, stale for changed ones. The receipt vouches
 	// for the bytes; make vouches for the rebuild decision.
 	if !isGo && !isDocker && !forceFull && loadConfig(wd).Incremental {
-		if wm := st.LatestManifestForCommand(command); wm != nil && len(wm.Blobs) > 0 {
-			if n, b, err := st.RestoreManifest(wm, wd); err == nil {
-				fmt.Printf("[brine] incremental warm: restored %d outputs (%.1f MB) from %s — freshness is the build tool's\n",
-					n, float64(b)/1024/1024, wm.Key)
-			} else {
-				fmt.Fprintf(os.Stderr, "[brine] incremental warm failed: %v — building cold\n", err)
+		warmed := false
+		// 1. the PARENT COMMIT's receipt: deterministic key (the commit
+		// chain is the remote-navigable index — LatestManifestForCommand
+		// is local-only and empty on fresh runners)
+		if parentOut, err := exec.Command("git", "-C", wd, "-c", "safe.directory="+wd,
+			"rev-parse", "HEAD~1").Output(); err == nil {
+			parent := strings.TrimSpace(string(parentOut))
+			pk := commitReceiptKeyFor(parent, command+keyTail(wd, args), toolchain)
+			if m, err := st.GetManifest(pk); err == nil && m != nil && len(m.Blobs) > 0 {
+				if n, b, rerr := st.RestoreManifest(m, wd); rerr == nil {
+					fmt.Printf("[brine] incremental warm (parent %s): restored %d outputs (%.1f MB) — freshness is the build tool's\n",
+						parent[:8], n, float64(b)/1024/1024)
+					warmed = true
+				}
+			}
+		}
+		// 2. fallback: the latest local manifest for this command
+		// (same-runner repeats)
+		if !warmed {
+			if wm := st.LatestManifestForCommand(command); wm != nil && len(wm.Blobs) > 0 {
+				if n, b, err := st.RestoreManifest(wm, wd); err == nil {
+					fmt.Printf("[brine] incremental warm: restored %d outputs (%.1f MB) from %s — freshness is the build tool's\n",
+						n, float64(b)/1024/1024, wm.Key)
+					warmed = true
+				} else {
+					fmt.Fprintf(os.Stderr, "[brine] incremental warm failed: %v — building cold\n", err)
+				}
 			}
 		}
 	}

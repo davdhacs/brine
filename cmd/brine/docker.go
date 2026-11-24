@@ -132,8 +132,17 @@ func commitReceiptKey(wd, keyCommand, toolchain string) (string, bool) {
 		"diff-index", "--quiet", "HEAD", "--").Run(); err != nil {
 		return "", false
 	}
-	h := sha256.Sum256([]byte(head + "\x00" + keyCommand + "\x00" + toolchain))
-	return hex.EncodeToString(h[:])[:16], true
+	return commitReceiptKeyFor(head, keyCommand, toolchain), true
+}
+
+// commitReceiptKeyFor computes the deterministic commit-receipt key
+// for an explicit sha — no tree access needed. This makes the commit
+// chain a remote-navigable index: the incremental warm can derive
+// HEAD~1's receipt key and fetch it from the shared store directly
+// (LatestManifestForCommand is local-only and empty on fresh runners).
+func commitReceiptKeyFor(sha, keyCommand, toolchain string) string {
+	h := sha256.Sum256([]byte(sha + "\x00" + keyCommand + "\x00" + toolchain))
+	return hex.EncodeToString(h[:])[:16]
 }
 
 // dockerBaseDigests resolves the CURRENT registry digest of every FROM
