@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 )
 
 const ghaTwirpService = "github.actions.results.api.v1.CacheService"
@@ -122,22 +124,29 @@ func (r *Remote) ghaTwirp(method string, req any, out any) error {
 	return nil
 }
 
-// ghaBlobPut uploads body to the SAS URL (direct Azure Blob PUT).
+// ghaBlobPut uploads body to the SAS URL (direct Azure Blob PUT),
+// retrying transient failures once — a reserved-but-empty entry is
+// immutable and poisons the key (see ghaStore).
 func (r *Remote) ghaBlobPut(sasURL string, body []byte) error {
-	hreq, err := http.NewRequest("PUT", sasURL, bytes.NewReader(body))
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		hreq, err := http.NewRequest("PUT", sasURL, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		hreq.Header.Set("x-ms-blob-type", "BlockBlob")
+		resp, err := r.client.Do(hreq)
+		if err != nil {
+			lastErr = fmt.Errorf("gha blob PUT: %w", err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusCreated {
+			return nil
+		}
+		lastErr = fmt.Errorf("gha blob PUT: HTTP %d", resp.StatusCode)
 	}
-	hreq.Header.Set("x-ms-blob-type", "BlockBlob")
-	resp, err := r.client.Do(hreq)
-	if err != nil {
-		return fmt.Errorf("gha blob PUT: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("gha blob PUT: HTTP %d", resp.StatusCode)
-	}
-	return nil
+	return lastErr
 }
 
 // ghaCreate reserves a cache entry. Returns (uploadURL, created,
@@ -160,24 +169,210 @@ func (r *Remote) ghaCreate(key string) (string, bool, error) {
 	return resp.SignedUploadURL, true, nil
 }
 
-// ghaStore: create → upload → finalize. body is stored verbatim.
+// ghaStore: create → upload → finalize → verify; dedup-skips are
+// verified too. body is stored verbatim.
+//
+// The verification closes the poisoned-key hole: GHA entries are
+// IMMUTABLE, and a failed PUT can leave a reserved-but-empty entry.
+// An unverified dedup-skip would count it as success and the manifest
+// would reference broken bytes forever (found live: INTEGRITY FAILURE
+// on restore of an empty libmbedcrypto.a). Policy: verify every
+// referenced entry; broken → repair (delete + repush) when possible,
+// else REFUSE the store so the manifest is never uploaded with a
+// broken reference (the receipt stays local — correct, just unshared).
 func (r *Remote) ghaStore(key string, body []byte) (created bool, err error) {
 	url, created, err := r.ghaCreate(key)
-	if err != nil || !created {
-		return created, err
+	if err != nil {
+		return false, err
 	}
-	if err := r.ghaBlobPut(url, body); err != nil {
-		return created, err
+	if created {
+		if err := r.ghaPutEntry(url, key, body); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	// dedup: the entry exists — verify it is LIVE (serves bytes; the
+	// poisoned case is a reserved-but-EMPTY entry). Content correctness
+	// is enforced at restore time (every fetch hash-verifies); here we
+	// only refuse to reference dead entries. Different content under
+	// the same key is legitimate PutIfNotExist semantics — existing
+	// wins, the caller gets created=false.
+	if verr := r.ghaVerifyEntryLive(key); verr == nil {
+		return false, nil // healthy duplicate — the common case
+	}
+	// broken existing entry: repair, or refuse to reference it
+	if rerr := r.ghaRepairEntry(key, body); rerr == nil {
+		return true, nil
+	}
+	return false, fmt.Errorf("gha store %s: existing entry broken and unrepairable — refusing to store a manifest referencing it", key)
+}
+
+// ghaPutEntry uploads body to a fresh SAS URL and verifies the result.
+func (r *Remote) ghaPutEntry(sasURL, key string, body []byte) error {
+	if err := r.ghaBlobPut(sasURL, body); err != nil {
+		return err
 	}
 	var fin ghaFinalizeResp
 	if err := r.ghaTwirp("FinalizeCacheEntryUpload",
 		ghaFinalizeReq{Key: key, Version: r.ghaVer, SizeBytes: fmt.Sprintf("%d", len(body))}, &fin); err != nil {
-		return created, err
+		return err
 	}
 	if !fin.OK {
-		return created, fmt.Errorf("gha finalize %s: %s", key, fin.Message)
+		return fmt.Errorf("gha finalize %s: %s", key, fin.Message)
 	}
-	return true, nil
+	if err := r.ghaVerifyEntry(key, body); err != nil {
+		// immutable: repair by delete + repush, else fail the upload
+		if rerr := r.ghaRepairEntry(key, body); rerr != nil {
+			return fmt.Errorf("gha verify %s: %w (repair unavailable: %v)", key, err, rerr)
+		}
+	}
+	return nil
+}
+
+// ghaRepairEntry heals a poisoned immutable key: delete the broken
+// entry via the REST API, then create + put + finalize + verify fresh.
+func (r *Remote) ghaRepairEntry(key string, body []byte) error {
+	if err := r.ghaDeleteEntry(key); err != nil {
+		return err
+	}
+	url, created, err := r.ghaCreate(key)
+	if err != nil || !created {
+		return fmt.Errorf("re-create after delete: %v (created=%v)", err, created)
+	}
+	if err := r.ghaBlobPut(url, body); err != nil {
+		return err
+	}
+	var fin ghaFinalizeResp
+	if err := r.ghaTwirp("FinalizeCacheEntryUpload",
+		ghaFinalizeReq{Key: key, Version: r.ghaVer, SizeBytes: fmt.Sprintf("%d", len(body))}, &fin); err != nil {
+		return err
+	}
+	if !fin.OK {
+		return fmt.Errorf("gha finalize %s: %s", key, fin.Message)
+	}
+	return r.ghaVerifyEntry(key, body)
+}
+
+// ghaVerifyEntryLive proves a dedup-skipped entry actually serves
+// bytes: it has a download URL and a non-zero Content-Range total.
+// The poisoned-key failure mode (create succeeded, PUT never did)
+// presents as no-URL or total=0. Deliberately weaker than
+// ghaVerifyEntry: content correctness is the restore side's job
+// (every fetch hash-verifies against the content-addressed key).
+func (r *Remote) ghaVerifyEntryLive(key string) error {
+	url, err := r.ghaLookupURL(key)
+	if err != nil {
+		return err
+	}
+	if url == "" {
+		return fmt.Errorf("entry has no download URL")
+	}
+	hreq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Range", "bytes=0-0")
+	resp, err := r.client.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("range GET: HTTP %d (want 206)", resp.StatusCode)
+	}
+	cr := resp.Header.Get("Content-Range")
+	var start, total int64
+	if _, err := fmt.Sscanf(cr, "bytes %d-%d/%d", &start, new(int64), &total); err != nil {
+		return fmt.Errorf("Content-Range parse: %q", cr)
+	}
+	if total == 0 {
+		return fmt.Errorf("entry serves 0 bytes")
+	}
+	return nil
+}
+
+// ghaVerifyEntry proves the stored entry is live and correct with a
+// 64-byte ranged GET: the prefix bytes must match what we uploaded
+// and the Content-Range total must equal the stored size. This catches
+// reserved-but-empty entries (the immutable-poisoning failure mode)
+// at negligible transfer cost.
+func (r *Remote) ghaVerifyEntry(key string, stored []byte) error {
+	url, err := r.ghaLookupURL(key)
+	if err != nil {
+		return err
+	}
+	if url == "" {
+		return fmt.Errorf("entry absent after finalize")
+	}
+	hreq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	n := 64
+	if len(stored) < n {
+		n = len(stored)
+	}
+	hreq.Header.Set("Range", fmt.Sprintf("bytes=0-%d", n-1))
+	resp, err := r.client.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("range GET: HTTP %d (want 206)", resp.StatusCode)
+	}
+	// Content-Range: bytes 0-63/<total>
+	cr := resp.Header.Get("Content-Range")
+	var total int64
+	if _, err := fmt.Sscanf(cr, "bytes 0-%d/%d", new(int64), &total); err != nil {
+		return fmt.Errorf("Content-Range parse: %q", cr)
+	}
+	if total != int64(len(stored)) {
+		return fmt.Errorf("entry size %d, uploaded %d", total, len(stored))
+	}
+	prefix := make([]byte, n)
+	if _, err := io.ReadFull(resp.Body, prefix); err != nil {
+		return err
+	}
+	if !bytes.Equal(prefix, stored[:n]) {
+		return fmt.Errorf("entry prefix mismatch")
+	}
+	return nil
+}
+
+// ghaDeleteEntry removes a cache entry via the REST API — the repair
+// path for immutable poisoned keys. Requires the workflow to expose
+// the job token (BRINE_GH_TOKEN or GITHUB_TOKEN env) and the runner's
+// GITHUB_REPOSITORY / GITHUB_API_URL.
+func (r *Remote) ghaDeleteEntry(key string) error {
+	token := os.Getenv("BRINE_GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	repo := os.Getenv("GITHUB_REPOSITORY")
+	if token == "" || repo == "" {
+		return fmt.Errorf("no token/repo for entry deletion")
+	}
+	api := os.Getenv("GITHUB_API_URL")
+	if api == "" {
+		api = "https://api.github.com"
+	}
+	hreq, err := http.NewRequest("DELETE",
+		api+"/repos/"+repo+"/actions/caches?key="+url.QueryEscape(key), nil)
+	if err != nil {
+		return err
+	}
+	hreq.Header.Set("Authorization", "Bearer "+token)
+	hreq.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := r.client.Do(hreq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("entry delete: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // ghaLookupURL returns the signed download URL, or "" when absent.

@@ -80,6 +80,19 @@ func newFakeTwirpServer(t *testing.T) *fakeTwirpServer {
 				http.Error(w, "not found", http.StatusNotFound)
 				return
 			}
+			if rng := r.Header.Get("Range"); rng != "" {
+				// minimal Range support: bytes=0-N
+				var start, end int
+				if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err == nil {
+					if end >= len(body) {
+						end = len(body) - 1
+					}
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+					w.WriteHeader(http.StatusPartialContent)
+					w.Write(body[start : end+1])
+					return
+				}
+			}
 			w.Write(body)
 		default:
 			http.Error(w, "bad method", http.StatusMethodNotAllowed)
