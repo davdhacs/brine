@@ -244,13 +244,22 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 	var mu sync.Mutex
 	var count int
 	var total int64
+	// Dedup by content hash: outputs with identical content (symlinked
+	// or copied artifacts — libcurl.so.4 vs libcurl.so.4.8.0) share a
+	// hash; fetching the same blob twice in parallel races the shared
+	// .tmp path (found live: "rename .tmp: no such file").
+	unique := map[string][]BlobRef{}
+	for _, ref := range m.Blobs {
+		unique[ref.Hash] = append(unique[ref.Hash], ref)
+	}
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 16)
-	errCh := make(chan error, len(m.Blobs))
-	for _, ref := range m.Blobs {
+	errCh := make(chan error, len(unique))
+	for _, refs := range unique {
+		ref := refs[0] // fetch once; write to every path below
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(ref BlobRef) {
+		go func(ref BlobRef, paths []BlobRef) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			data, err := s.GetBlob(ref.Hash)
@@ -266,31 +275,35 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 					return
 				}
 			}
-			target := filepath.Join(dir, ref.Path)
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				errCh <- err
-				return
-			}
-			if err := os.WriteFile(target, data, 0o644); err != nil {
-				errCh <- err
-				return
-			}
-			// Restore with the BUILD-time mtime: build systems with
-			// mtime-based freshness (cargo's fingerprints) treat
-			// restore-time mtimes as "newer than sources" and recompile
-			// (measured: 15 of ~170 crates on the fact case study).
-			if m.BuiltAt > 0 {
-				t := time.Unix(0, m.BuiltAt)
-				os.Chtimes(target, t, t)
-			}
-			if ref.Mode != 0 {
-				os.Chmod(target, os.FileMode(ref.Mode))
+			for _, p := range paths {
+				target := filepath.Join(dir, p.Path)
+				if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+					errCh <- err
+					return
+				}
+				if err := os.WriteFile(target, data, 0o644); err != nil {
+					errCh <- err
+					return
+				}
+				// Restore with the BUILD-time mtime: build systems with
+				// mtime-based freshness (cargo's fingerprints) treat
+				// restore-time mtimes as "newer than sources" and recompile
+				// (measured: 15 of ~170 crates on the fact case study).
+				if m.BuiltAt > 0 {
+					t := time.Unix(0, m.BuiltAt)
+					os.Chtimes(target, t, t)
+				}
+				if p.Mode != 0 {
+					os.Chmod(target, os.FileMode(p.Mode))
+				}
+				mu.Lock()
+				count++
+				mu.Unlock()
 			}
 			mu.Lock()
-			count++
-			total += int64(len(data))
+			total += int64(len(data)) * int64(len(paths))
 			mu.Unlock()
-		}(ref)
+		}(ref, refs)
 	}
 	wg.Wait()
 	close(errCh)

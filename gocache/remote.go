@@ -251,11 +251,13 @@ func (r *Remote) streamURLToDest(url string, headers map[string]string, key, exp
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	tmp := dest + ".tmp"
-	f, err := os.Create(tmp)
+	// unique tmp: concurrent fetches of the same blob race a shared
+	// .tmp path (found live in the parallel-restore race)
+	f, err := os.CreateTemp(filepath.Dir(dest), ".fetch-*.tmp")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	h := sha256.New()
 	buf := make([]byte, 256<<10)
 	fetchErr := func() error {
