@@ -77,6 +77,13 @@ type Manifest struct {
 type Store struct {
 	root   string // directory root
 	remote *gocache.Remote
+
+	// single-flight for remote fetches: concurrent GetBlob calls for
+	// the same hash collapse to ONE download — waiters block on the
+	// channel until the fetch completes (found via the symlink-race
+	// investigation: correct-but-wasteful double downloads)
+	fetchMu  sync.Mutex
+	inFlight map[string]chan struct{}
 }
 
 // New creates a Store rooted at dir.
@@ -86,7 +93,7 @@ func New(dir string) (*Store, error) {
 			return nil, fmt.Errorf("store init %s: %w", d, err)
 		}
 	}
-	return &Store{root: dir}, nil
+	return &Store{root: dir, inFlight: map[string]chan struct{}{}}, nil
 }
 
 // blobPath returns the on-disk path for a blob hash.

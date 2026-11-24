@@ -148,6 +148,26 @@ func (s *Store) remoteFetchBlob(hash string) error {
 	if _, err := os.Stat(s.blobPath(hash)); err == nil {
 		return nil // already local
 	}
+	// single-flight: one download per hash; concurrent callers wait
+	// for the in-flight fetch instead of racing a second download
+	s.fetchMu.Lock()
+	if ch, ok := s.inFlight[hash]; ok {
+		s.fetchMu.Unlock()
+		<-ch
+		if _, err := os.Stat(s.blobPath(hash)); err == nil {
+			return nil
+		}
+		return fmt.Errorf("blob fetch %s: in-flight fetch did not produce the blob", hash[:12])
+	}
+	ch := make(chan struct{})
+	s.inFlight[hash] = ch
+	s.fetchMu.Unlock()
+	defer func() {
+		s.fetchMu.Lock()
+		delete(s.inFlight, hash)
+		s.fetchMu.Unlock()
+		close(ch) // wake waiters
+	}()
 	// stream to disk with stall detection: receipt blobs are 100MB+
 	// and a fixed client timeout kills legitimate transfers on modest
 	// links (was masked as "blob not found" — the prometheus 148MB
