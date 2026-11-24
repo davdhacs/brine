@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -147,11 +148,28 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 }
 
 // matchOutputScope matches a snapshot-scope pattern: exact relative
-// path, or filepath.Match glob when the pattern contains * ? [.
-// Precise by design — a scope declaration of "build/app" must not
-// capture build/app.o.
+// path, filepath.Match glob when the pattern contains * ? [ — with
+// ** supported as a recursive wildcard (matches across separators:
+// "pkg/**" = everything under pkg/) — or a directory prefix when the
+// pattern ends in /** .
 func matchOutputScope(patterns []string, rel string) bool {
 	for _, p := range patterns {
+		if strings.HasSuffix(p, "/**") {
+			// recursive: everything under the prefix
+			prefix := strings.TrimSuffix(p, "**")
+			if strings.HasPrefix(rel, prefix) {
+				return true
+			}
+			continue
+		}
+		if strings.Contains(p, "**") {
+			// ** in the middle: fall back to segment-wise ** = * per
+			// filepath.Match, then prefix-match the leading part
+			if globMatchRecursive(p, rel) {
+				return true
+			}
+			continue
+		}
 		if strings.ContainsAny(p, "*?[") {
 			if ok, _ := filepath.Match(p, rel); ok {
 				return true
@@ -164,6 +182,41 @@ func matchOutputScope(patterns []string, rel string) bool {
 		}
 	}
 	return false
+}
+
+// globMatchRecursive matches a pattern containing ** anywhere, where
+// ** crosses path separators. Implemented by expanding the pattern
+// into a regexp over the slash-separated path.
+func globMatchRecursive(pattern, rel string) bool {
+	var rx strings.Builder
+	rx.WriteString("^")
+	for _, seg := range strings.Split(pattern, "/") {
+		if seg == "**" {
+			rx.WriteString("(?:[^/]+/)*") // zero or more segments
+			continue
+		}
+		// translate single-segment glob (* ? [class]) to regex
+		for _, r := range seg {
+			switch r {
+			case '*':
+				rx.WriteString("[^/]*")
+			case '?':
+				rx.WriteString("[^/]")
+			case '[':
+				rx.WriteString("[")
+			case ']':
+				rx.WriteString("]")
+			default:
+				rx.WriteString(regexp.QuoteMeta(string(r)))
+			}
+		}
+		rx.WriteString("/")
+	}
+	compiled, err := regexp.Compile(strings.TrimSuffix(rx.String(), "/") + "$")
+	if err != nil {
+		return false
+	}
+	return compiled.MatchString(rel)
 }
 
 // OutputHashes returns path → content hash for every output blob in a

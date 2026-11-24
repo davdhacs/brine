@@ -58,6 +58,15 @@ type Config struct {
 	// rebuild state. Env override: BRINE_OUTPUT_PATTERNS
 	OutputPatterns []string `json:"output_patterns,omitempty"`
 
+	// Closure: "key_files" switches the receipt closure to EXACTLY the
+	// key_files globs — nothing observed, nothing walked. For builds
+	// whose inputs are a declared artifact set (a tarball-driven dep
+	// build): the key is computable identically at check time and
+	// store time on a fresh machine, which the observed/noVCS paths
+	// cannot guarantee (extraction-inside-the-wrap pollutes observed
+	// read-sets with files that don't exist at check time).
+	Closure string `json:"closure,omitempty"`
+
 	// BuildVCS: "off" disables VCS key-folding (promise that stamping
 	// is disabled in your build). Default "key-fold".
 	BuildVCS string `json:"buildvcs,omitempty"`

@@ -322,7 +322,12 @@ func cmdMemoize(args []string, forceFull bool) {
 	strategy := store.StrategyObserved
 	closure := ""
 
-	if isGo {
+	if loadConfig(wd).Closure == "key_files" {
+		// declared closure: EXACTLY the key_files globs — deterministic
+		// at check time and store time (tarball-driven dep builds)
+		strategy = "declared"
+		readSet = expandKeyFiles(wd, loadConfig(wd).KeyFiles)
+	} else if isGo {
 		strategy = store.StrategyGoList
 		closure = "go list -deps " + strings.Join(goPatterns, " ")
 		readSet, err = key.GoClosure(wd, goPatterns)
@@ -426,10 +431,19 @@ func cmdMemoize(args []string, forceFull bool) {
 	// configs — anything the build REgenerates is excluded from the
 	// STORED key (writes filter), so a leftover copy makes keys differ
 	// → miss → safe. Absent (wiped) → matches → hit.
+	// Declared-closure mode (closure=key_files) computes candidates
+	// from the declared globs — works for non-git dirs (the tarball-
+	// driven dep-build case: fresh machines must reach remote receipts
+	// before building, which the git-only gate never allowed).
 	if !isGo && !isDocker && !forceFull {
-		if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
-			candidates := unionFiles(gitFiles, untrackedConfigs(wd))
-			if len(candidates) > 0 {
+		var candidates []string
+		cfg := loadConfig(wd)
+		if cfg.Closure == "key_files" {
+			candidates = expandKeyFiles(wd, cfg.KeyFiles)
+		} else if gitFiles := gitTrackedFiles(wd); gitFiles != nil {
+			candidates = unionFiles(gitFiles, untrackedConfigs(wd))
+		}
+		if len(candidates) > 0 {
 				pk := key.FromFiles(wd, candidates, command+"|"+toolchain+vcsFold(wd)+keyTail(wd, args))
 				if st.HasManifest(pk) {
 					if m, err := st.GetManifest(pk); err == nil && len(m.Blobs) > 0 {
@@ -468,7 +482,6 @@ func cmdMemoize(args []string, forceFull bool) {
 				}
 			}
 		}
-	}
 
 	// === Run the command ===
 	if forceFull {
@@ -568,7 +581,15 @@ func cmdMemoize(args []string, forceFull bool) {
 	}
 
 	// === Discover the read-set (non-Go commands) ===
-	if isDocker {
+	if loadConfig(wd).Closure == "key_files" {
+		// declared closure: EXACTLY the key_files globs — must match
+		// the pre-build check's candidates or receipts store under a
+		// different key than the check computes (found live: the dep
+		// receipt re-keyed every run because this derivation fell
+		// through to the observed path).
+		readSet = expandKeyFiles(wd, loadConfig(wd).KeyFiles)
+		strategy = "declared"
+	} else if isDocker {
 		// The build context IS the input closure — including files
 		// that are outputs of earlier commands (binaries COPYied into
 		// the image). Git-tracked fallback is unsound for image builds
@@ -1123,6 +1144,31 @@ func untrackedConfigs(wd string) []string {
 			add(f)
 		}
 	}
+	return out
+}
+
+// expandKeyFiles expands the key_files globs (relative to wd) into a
+// sorted list of relative paths — the declared-closure candidate set,
+// identical at check time and store time by construction.
+func expandKeyFiles(wd string, globs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, g := range globs {
+		matches, _ := filepath.Glob(filepath.Join(wd, g))
+		for _, m := range matches {
+			info, err := os.Stat(m)
+			if err != nil || info.IsDir() {
+				continue
+			}
+			rel, _ := filepath.Rel(wd, m)
+			rel = filepath.ToSlash(rel)
+			if !seen[rel] {
+				seen[rel] = true
+				out = append(out, rel)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
