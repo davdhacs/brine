@@ -1,0 +1,282 @@
+{
+  "metadata": {
+    "project": "curl/curl",
+    "commits": 10,
+    "date": "2026-11-24",
+    "runner": "ubuntu-latest (4 vCPU, ephemeral)",
+    "build": "autoreconf + configure + make --enable-unity (autotools, mbedtls dep)",
+    "calibration": "sqlite amalgamation compile (median of 3)"
+  },
+  "arms": {
+    "A": {
+      "name": "actions/cache (incumbent)",
+      "strategy": "dep cache only, full rebuild"
+    },
+    "B": {
+      "name": "ccache + brine serve",
+      "strategy": "per-file content caching, COMPILERCHECK=content"
+    },
+    "C": {
+      "name": "brine receipt + mtime",
+      "strategy": "bundle restore, parent-commit chain"
+    },
+    "D": {
+      "name": "actions/cache + mtime",
+      "strategy": "build-tree cache + mtime normalization"
+    }
+  },
+  "per_commit": [
+    {
+      "idx": 1,
+      "commit_num": 10,
+      "diff_files": 2,
+      "A_build_s": 33.5,
+      "A_dep_s": 0.0,
+      "A_calib_s": 18.5,
+      "A_cpu": "Intel(R) Xeon(R) 6975P-C",
+      "B_build_s": 226.9,
+      "B_dep_s": 2.4,
+      "B_calib_s": 22.4,
+      "B_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+      "C_build_s": 49.3,
+      "C_dep_s": 22.9,
+      "C_calib_s": 19.8,
+      "C_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "D_build_s": 12.8,
+      "D_dep_s": 0.0,
+      "D_calib_s": 24.9,
+      "D_cpu": "INTEL(R) XEON(R) PLATINUM 8573C"
+    },
+    {
+      "idx": 2,
+      "commit_num": 9,
+      "diff_files": 2,
+      "A_build_s": 34.5,
+      "A_dep_s": 0.0,
+      "A_calib_s": 24.5,
+      "A_cpu": "AMD EPYC 7763 64-Core Processor",
+      "B_build_s": 49.4,
+      "B_dep_s": 0.5,
+      "B_calib_s": 25.9,
+      "B_cpu": "AMD EPYC 7763 64-Core Processor",
+      "C_build_s": 10.8,
+      "C_dep_s": 2.4,
+      "C_calib_s": 19.8,
+      "C_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "D_build_s": 7.9,
+      "D_dep_s": 0.0,
+      "D_calib_s": 18.3,
+      "D_cpu": "Intel(R) Xeon(R) 6973P-C"
+    },
+    {
+      "idx": 3,
+      "commit_num": 8,
+      "diff_files": 9,
+      "A_build_s": 23.9,
+      "A_dep_s": 0.0,
+      "A_calib_s": 18.1,
+      "A_cpu": "AMD EPYC 9V45 96-Core Processor",
+      "B_build_s": 101.6,
+      "B_dep_s": 1.7,
+      "B_calib_s": 20.6,
+      "B_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "C_build_s": 21.7,
+      "C_dep_s": 0.5,
+      "C_calib_s": 18.9,
+      "C_cpu": "Intel(R) Xeon(R) 6975P-C",
+      "D_build_s": 24.0,
+      "D_dep_s": 0.0,
+      "D_calib_s": 19.4,
+      "D_cpu": "Intel(R) Xeon(R) 6975P-C"
+    },
+    {
+      "idx": 4,
+      "commit_num": 7,
+      "diff_files": 1,
+      "A_build_s": 23.6,
+      "A_dep_s": 0.0,
+      "A_calib_s": 19.5,
+      "A_cpu": "AMD EPYC 9V45 96-Core Processor",
+      "B_build_s": 80.0,
+      "B_dep_s": 13.7,
+      "B_calib_s": 23.5,
+      "B_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+      "C_build_s": 25.0,
+      "C_dep_s": 2.4,
+      "C_calib_s": 24.3,
+      "C_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+      "D_build_s": 27.9,
+      "D_dep_s": 0.0,
+      "D_calib_s": 18.6,
+      "D_cpu": "Intel(R) Xeon(R) 6975P-C"
+    },
+    {
+      "idx": 5,
+      "commit_num": 6,
+      "diff_files": 1,
+      "A_build_s": 41.4,
+      "A_dep_s": 0.0,
+      "A_calib_s": 20.2,
+      "A_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "B_build_s": 74.0,
+      "B_dep_s": 1.2,
+      "B_calib_s": 18.8,
+      "B_cpu": "AMD EPYC 9V45 96-Core Processor",
+      "C_build_s": 25.2,
+      "C_dep_s": 2.9,
+      "C_calib_s": 24.7,
+      "C_cpu": "AMD EPYC 7763 64-Core Processor",
+      "D_build_s": 13.4,
+      "D_dep_s": 0.0,
+      "D_calib_s": 19.8,
+      "D_cpu": "AMD EPYC 9V74 80-Core Processor"
+    },
+    {
+      "idx": 6,
+      "commit_num": 5,
+      "diff_files": 2,
+      "A_build_s": 43.6,
+      "A_dep_s": 0.0,
+      "A_calib_s": 24.2,
+      "A_cpu": "AMD EPYC 7763 64-Core Processor",
+      "B_build_s": 77.7,
+      "B_dep_s": 2.2,
+      "B_calib_s": 19.0,
+      "B_cpu": "AMD EPYC 9V45 96-Core Processor",
+      "C_build_s": 7.0,
+      "C_dep_s": 0.5,
+      "C_calib_s": 24.2,
+      "C_cpu": "AMD EPYC 7763 64-Core Processor",
+      "D_build_s": 6.8,
+      "D_dep_s": 0.0,
+      "D_calib_s": 15.7,
+      "D_cpu": "AMD EPYC 9V45 96-Core Processor"
+    },
+    {
+      "idx": 7,
+      "commit_num": 4,
+      "diff_files": 1,
+      "A_build_s": 27.0,
+      "A_dep_s": 0.0,
+      "A_calib_s": 19.3,
+      "A_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "B_build_s": 55.2,
+      "B_dep_s": 0.6,
+      "B_calib_s": 20.7,
+      "B_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "C_build_s": 12.0,
+      "C_dep_s": 0.5,
+      "C_calib_s": 23.4,
+      "C_cpu": "AMD EPYC 7763 64-Core Processor",
+      "D_build_s": 12.8,
+      "D_dep_s": 0.0,
+      "D_calib_s": 20.6,
+      "D_cpu": "AMD EPYC 9V74 80-Core Processor"
+    },
+    {
+      "idx": 8,
+      "commit_num": 3,
+      "diff_files": 1,
+      "A_build_s": 34.5,
+      "A_dep_s": 0.0,
+      "A_calib_s": 24.6,
+      "A_cpu": "AMD EPYC 7763 64-Core Processor",
+      "B_build_s": 119.9,
+      "B_dep_s": 3.0,
+      "B_calib_s": 23.7,
+      "B_cpu": "AMD EPYC 7763 64-Core Processor",
+      "C_build_s": 22.8,
+      "C_dep_s": 0.6,
+      "C_calib_s": 25.0,
+      "C_cpu": "AMD EPYC 7763 64-Core Processor",
+      "D_build_s": 15.9,
+      "D_dep_s": 0.0,
+      "D_calib_s": 23.9,
+      "D_cpu": "AMD EPYC 7763 64-Core Processor"
+    },
+    {
+      "idx": 9,
+      "commit_num": 2,
+      "diff_files": 1,
+      "A_build_s": 35.4,
+      "A_dep_s": 0.0,
+      "A_calib_s": 18.4,
+      "A_cpu": "Intel(R) Xeon(R) 6975P-C",
+      "B_build_s": 94.6,
+      "B_dep_s": 2.4,
+      "B_calib_s": 23.6,
+      "B_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+      "C_build_s": 18.2,
+      "C_dep_s": 0.5,
+      "C_calib_s": 24.7,
+      "C_cpu": "AMD EPYC 7763 64-Core Processor",
+      "D_build_s": 15.7,
+      "D_dep_s": 0.0,
+      "D_calib_s": 24.2,
+      "D_cpu": "AMD EPYC 7763 64-Core Processor"
+    },
+    {
+      "idx": 10,
+      "commit_num": 1,
+      "diff_files": 2,
+      "A_build_s": 31.4,
+      "A_dep_s": 0.0,
+      "A_calib_s": 19.0,
+      "A_cpu": "Intel(R) Xeon(R) 6975P-C",
+      "B_build_s": 90.0,
+      "B_dep_s": 2.3,
+      "B_calib_s": 19.9,
+      "B_cpu": "AMD EPYC 9V74 80-Core Processor",
+      "C_build_s": 22.0,
+      "C_dep_s": 2.0,
+      "C_calib_s": 24.5,
+      "C_cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+      "D_build_s": 22.1,
+      "D_dep_s": 0.0,
+      "D_calib_s": 18.2,
+      "D_cpu": "Intel(R) Xeon(R) 6975P-C"
+    }
+  ],
+  "summaries": {
+    "A": {
+      "median_s": 34.5,
+      "iqr": [
+        25.5,
+        38.4
+      ],
+      "min_s": 23.6,
+      "max_s": 43.6,
+      "n": 9
+    },
+    "B": {
+      "median_s": 80.0,
+      "iqr": [
+        64.6,
+        98.1
+      ],
+      "min_s": 49.4,
+      "max_s": 119.9,
+      "n": 9
+    },
+    "C": {
+      "median_s": 21.7,
+      "iqr": [
+        11.4,
+        23.9
+      ],
+      "min_s": 7.0,
+      "max_s": 25.2,
+      "n": 9
+    },
+    "D": {
+      "median_s": 15.7,
+      "iqr": [
+        10.3,
+        23.1
+      ],
+      "min_s": 6.8,
+      "max_s": 27.9,
+      "n": 9
+    }
+  }
+}
