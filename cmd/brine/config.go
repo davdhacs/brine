@@ -67,6 +67,16 @@ type Config struct {
 	// read-sets with files that don't exist at check time).
 	Closure string `json:"closure,omitempty"`
 
+	// Incremental: on a receipt miss, restore the outputs of the most
+	// recent manifest for the SAME command before running — the build
+	// tool's own freshness logic (make: .o vs source mtimes) decides
+	// what to rebuild. Pairs with source-mtime normalization (checkout
+	// files stamped with their commit times) so restored intermediates
+	// are correctly fresh for unchanged sources, stale for changed
+	// ones. The receipt vouches for the bytes; make vouches for the
+	// rebuild decision.
+	Incremental bool `json:"incremental,omitempty"`
+
 	// BuildVCS: "off" disables VCS key-folding (promise that stamping
 	// is disabled in your build). Default "key-fold".
 	BuildVCS string `json:"buildvcs,omitempty"`

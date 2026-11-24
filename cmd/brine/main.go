@@ -483,6 +483,24 @@ func cmdMemoize(args []string, forceFull bool) {
 			}
 		}
 
+	// === Incremental warm: on a miss, restore the most recent outputs
+	// for this command before running — the build tool's freshness
+	// logic (make: .o vs source mtimes) decides what to rebuild.
+	// Pairs with source-mtime normalization (checkout files stamped
+	// with commit times): restored intermediates are fresh for
+	// unchanged sources, stale for changed ones. The receipt vouches
+	// for the bytes; make vouches for the rebuild decision.
+	if !isGo && !isDocker && !forceFull && loadConfig(wd).Incremental {
+		if wm := st.LatestManifestForCommand(command); wm != nil && len(wm.Blobs) > 0 {
+			if n, b, err := st.RestoreManifest(wm, wd); err == nil {
+				fmt.Printf("[brine] incremental warm: restored %d outputs (%.1f MB) from %s — freshness is the build tool's\n",
+					n, float64(b)/1024/1024, wm.Key)
+			} else {
+				fmt.Fprintf(os.Stderr, "[brine] incremental warm failed: %v — building cold\n", err)
+			}
+		}
+	}
+
 	// === Run the command ===
 	if forceFull {
 		fmt.Printf("[brine] audit: forcing full rebuild\n")
