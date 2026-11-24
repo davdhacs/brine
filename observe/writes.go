@@ -26,7 +26,12 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const maxWatchedDirs = 4096
+// maxWatchedDirs bounds the watch count as a runaway backstop only —
+// the OS is the real limit: fsnotify.Add errors when the kernel's
+// fs.inotify.max_user_watches is exhausted (tolerated — the walk and
+// the file scan continue, only later writes in that dir are missed),
+// and PATH_MAX bounds depth at the build's own file-creation time.
+const maxWatchedDirs = 1 << 20
 
 // Writes records files written or created during a build.
 type Writes struct {
