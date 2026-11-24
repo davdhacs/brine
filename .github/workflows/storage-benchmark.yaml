@@ -19,6 +19,8 @@ jobs:
     env:
       REPS: ${{ inputs.reps || '3' }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Runner record
         run: |
           mkdir -p bench && cd bench
@@ -49,85 +51,93 @@ jobs:
             echo "calib_ms=skipped" | tee calib.txt
           fi
 
-      - name: Cache protocol verification + throughput
+      - name: Env bootstrap (cache data plane)
+        uses: ./.github/actions/env-bootstrap
+
+      - name: "Cache protocol verification + throughput (v2: twirp + SAS blob)"
         run: |
           set -e
           cd bench
           for sz in 1 10 100; do
             dd if=/dev/urandom of=payload_${sz}MB.bin bs=1M count=$sz status=none
           done
-          if [ -z "$ACTIONS_CACHE_URL" ]; then
-            echo "VERIFY cache_v1=ABSENT (v2 migration: no ACTIONS_CACHE_URL on this runner)"
+          if [ -z "$ACTIONS_RESULTS_URL" ] || [ -z "$ACTIONS_RUNTIME_TOKEN" ]; then
+            echo "VERIFY cache_v2=ABSENT (no ACTIONS_RESULTS_URL/token after bootstrap)"
             exit 0
           fi
-          BASE="${ACTIONS_CACHE_URL}"
+          BASE="${ACTIONS_RESULTS_URL%/}/twirp/github.actions.results.api.v1.CacheService"
           AUTH="Authorization: Bearer ${ACTIONS_RUNTIME_TOKEN}"
           VER="brinebench-v1"
 
-          cache_put() { # key file -> echoes nothing; sets PUT_MS
+          twirp() { # method json-body
+            curl -s -X POST "$BASE/$1" -H "$AUTH" -H 'Content-Type: application/json' -d "$2"
+          }
+          jget() { python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('$1',''))"; }
+
+          cache_put_v2() { # key file
             local key=$1 file=$2
             local szb=$(stat -c%s "$file")
-            local id
-            id=$(curl -s -X POST "${BASE}_apis/artifactcache/caches" \
-              -H "$AUTH" -H 'Content-Type: application/json' \
-              -d "{\"key\":\"$key\",\"version\":\"$VER\"}" \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["cacheID"])')
+            local resp=$(twirp CreateCacheEntry "{\"key\":\"$key\",\"version\":\"$VER\"}")
+            local url=$(printf %s "$resp" | jget signed_upload_url)
+            if [ -z "$url" ]; then
+              printf 'VERIFY create_fail=%s\n' "$(printf %s "$resp" | jget message)"
+              return 1
+            fi
             local S=$(date +%s%3N)
-            curl -s -o /dev/null -X PATCH "${BASE}_apis/artifactcache/caches/$id" \
-              -H "$AUTH" -H "Content-Range: bytes 0-$((szb-1))/$szb" \
-              --data-binary @"$file"
-            curl -s -o /dev/null -X POST "${BASE}_apis/artifactcache/caches/$id" \
-              -H "$AUTH" -H 'Content-Type: application/json' -d "{\"size\":$szb}"
+            curl -s -o /dev/null -X PUT "$url" -H 'x-ms-blob-type: BlockBlob' --data-binary @"$file"
+            twirp FinalizeCacheEntryUpload "{\"key\":\"$key\",\"version\":\"$VER\",\"size_bytes\":\"$szb\"}" > /dev/null
             local E=$(date +%s%3N)
             PUT_MS=$((E-S))
           }
-
-          cache_lookup_url() { # key -> echoes download url
-            curl -s "${BASE}_apis/artifactcache/cache?keys=$1&version=$VER" -H "$AUTH" \
-              | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r.get("archive_download_url") or r.get("archiveLocation") or "")'
+          cache_get_url_v2() { # key
+            twirp GetCacheEntryDownloadURL "{\"key\":\"$1\",\"version\":\"$VER\"}" | jget signed_download_url
           }
 
           # --- protocol verification ---
           KEY="brinebench-verify-$GITHUB_RUN_ID"
+          R1=$(twirp CreateCacheEntry "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+          VURL=$(printf %s "$R1" | jget signed_upload_url)
           SZB=$(stat -c%s payload_1MB.bin)
-          RES=$(curl -s -X POST "${BASE}_apis/artifactcache/caches" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
-          VID=$(printf %s "$RES" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cacheID"])')
-          DUP=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}_apis/artifactcache/caches" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
-          UP=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "${BASE}_apis/artifactcache/caches/$VID" -H "$AUTH" -H "Content-Range: bytes 0-$((SZB-1))/$SZB" --data-binary @payload_1MB.bin)
-          FIN=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}_apis/artifactcache/caches/$VID" -H "$AUTH" -H 'Content-Type: application/json' -d "{\"size\":$SZB}")
-          LOOK=$(curl -s "${BASE}_apis/artifactcache/cache?keys=$KEY&version=$VER" -H "$AUTH")
-          printf 'VERIFY reserve_dup=%s patch=%s finalize=%s\n' "$DUP" "$UP" "$FIN"
-          printf '%s' "$LOOK" | python3 -c '
-          import json,sys
-          from urllib.parse import urlparse, parse_qsl
-          try: r=json.load(sys.stdin)
-          except Exception: print("VERIFY lookup=parse-fail"); raise SystemExit
-          print("VERIFY lookup_fields=%s" % sorted(r.keys()))
-          url = r.get("archive_download_url") or r.get("archiveLocation") or ""
-          if url:
-              u = urlparse(url)
-              print("VERIFY dl_host=%s" % u.netloc)
-              print("VERIFY sas_params=%s" % sorted(p for p,_ in parse_qsl(u.query)))
-          ' || true
-          DL=$(cache_lookup_url "$KEY")
-          if [ -n "$DL" ]; then
-            RG=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 "$DL")
-            RG2=$(curl -s -o /dev/null -w '%{http_code}' -r $((100*1024*1024))-$((100*1024*1024+1023)) "$DL")
-            printf 'VERIFY range_get_in_range=%s range_get_past_eof=%s\n' "$RG" "$RG2"
+          if [ -n "$VURL" ]; then
+            UP=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$VURL" -H 'x-ms-blob-type: BlockBlob' --data-binary @payload_1MB.bin)
+            FIN=$(twirp FinalizeCacheEntryUpload "{\"key\":\"$KEY\",\"version\":\"$VER\",\"size_bytes\":\"$SZB\"}")
+            printf 'VERIFY create_ok blob_put=%s finalize_ok=%s\n' "$UP" "$(printf %s "$FIN" | jget ok)"
+            # duplicate reserve (PutIfNotExist semantics)
+            R2=$(twirp CreateCacheEntry "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+            printf 'VERIFY create_duplicate_ok=%s message=%s\n' "$(printf %s "$R2" | jget ok)" "$(printf %s "$R2" | jget message)"
+            # download URL + SAS inspection + range test
+            LOOK=$(twirp GetCacheEntryDownloadURL "{\"key\":\"$KEY\",\"version\":\"$VER\"}")
+            DL=$(printf %s "$LOOK" | jget signed_download_url)
+            printf '%s' "$LOOK" | python3 -c '
+            import json,sys
+            from urllib.parse import urlparse, parse_qsl
+            r=json.load(sys.stdin)
+            print("VERIFY lookup_fields=%s" % sorted(r.keys()))
+            url = r.get("signed_download_url","")
+            if url:
+                u = urlparse(url)
+                print("VERIFY dl_host=%s" % u.netloc)
+                print("VERIFY sas_params=%s" % sorted(p for p,_ in parse_qsl(u.query)))
+            '
+            if [ -n "$DL" ]; then
+              RG=$(curl -s -o /dev/null -w '%{http_code}' -r 0-1023 "$DL")
+              printf 'VERIFY range_get=%s\n' "$RG"
+            fi
+          else
+            printf 'VERIFY create_failed message=%s\n' "$(printf %s "$R1" | jget message)"
           fi
 
-          # --- throughput: cache path ---
+          # --- throughput: cache v2 path ---
           for sz in 1 10 100; do
             for rep in $(seq "$REPS"); do
               K="brinebench-${sz}MB-$GITHUB_RUN_ID-$rep"
-              cache_put "$K" payload_${sz}MB.bin
+              cache_put_v2 "$K" payload_${sz}MB.bin
               U=$PUT_MS
               S=$(date +%s%3N)
-              DL=$(cache_lookup_url "$K")
+              DL=$(cache_get_url_v2 "$K")
               curl -s -o /dev/null "$DL"
               E=$(date +%s%3N)
               printf 'RESULT path=cache size=%s rep=%s up_ms=%s dl_ms=%s\n' "$sz" "$rep" "$U" "$((E-S))"
-              # ranged parallel download (4 chunks), 100MB only
               if [ "$sz" = 100 ]; then
                 S=$(date +%s%3N)
                 SZB=$(stat -c%s payload_100MB.bin)

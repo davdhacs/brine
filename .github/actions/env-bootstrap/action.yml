@@ -1,0 +1,5 @@
+name: 'brine env bootstrap'
+description: 'Expose the cache/artifact data-plane env vars to subsequent run steps (the runner injects them only into action processes)'
+runs:
+  using: node20
+  main: index.js
