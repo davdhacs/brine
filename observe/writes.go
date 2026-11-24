@@ -59,7 +59,7 @@ func NewWrites(root string) *Writes {
 			name == "node_modules" || name == "target"
 	}
 	w.skip = skip
-	w.addTree(real)
+	w.addTree(real, false)
 	if w.dirs == 0 {
 		fsn.Close()
 		return w
@@ -74,22 +74,33 @@ func NewWrites(root string) *Writes {
 // when the build creates new directories (cmake --install makes
 // pkg/mbedtls/include/... mid-build — files written into unwatched
 // new dirs were invisible to the write-tracker, found live).
-func (w *Writes) addTree(dir string) {
+//
+// recordFiles (mid-build calls only): every regular file under dir is
+// recorded as written. Sound because the directory did not exist at
+// build start — anything inside it was created during the build. This
+// closes the event race: files written between the mkdir and the
+// watch landing are caught by the scan instead of the event.
+func (w *Writes) addTree(dir string, recordFiles bool) {
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !d.IsDir() {
+		if d.IsDir() {
+			if path != w.root && w.skip(d.Name()) {
+				return filepath.SkipDir
+			}
+			if w.dirs >= maxWatchedDirs {
+				return filepath.SkipAll
+			}
+			if err := w.watch.Add(path); err == nil {
+				w.dirs++
+			}
 			return nil
 		}
-		if path != w.root && w.skip(d.Name()) {
-			return filepath.SkipDir
-		}
-		if w.dirs >= maxWatchedDirs {
-			return filepath.SkipAll
-		}
-		if err := w.watch.Add(path); err == nil {
-			w.dirs++
+		if recordFiles && d.Type().IsRegular() {
+			w.mu.Lock()
+			w.files[path] = true
+			w.mu.Unlock()
 		}
 		return nil
 	})
@@ -110,7 +121,7 @@ func (w *Writes) loop(root string) {
 			// case: pkg/mbedtls/include/... appears mid-build).
 			if ev.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
-					w.addTree(ev.Name)
+					w.addTree(ev.Name, true)
 				}
 			}
 			// Only files under root; ignore the watcher's own churn.
