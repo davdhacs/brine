@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -222,42 +223,69 @@ func (s *Store) HasManifest(key string) bool {
 // is written, INCLUDING locally-stored ones — a corrupted local blob
 // file would otherwise serve wrong bytes silently. Opt out only with
 // BRINE_TRUST_LOCAL=1 (skips ~1s per GB on restore).
+//
+// Downloads run CONCURRENTLY (bounded 16): a 125-blob dep receipt
+// restored sequentially measured ~35s (one remote fetch per small
+// header) — slower than the incumbent's single-tarball restore. The
+// per-blob sha256 verification is unchanged; any integrity failure
+// aborts with the first error (visible by design).
 func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 	trustLocal := os.Getenv("BRINE_TRUST_LOCAL") == "1"
+	var mu sync.Mutex
 	var count int
 	var total int64
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	errCh := make(chan error, len(m.Blobs))
 	for _, ref := range m.Blobs {
-		data, err := s.GetBlob(ref.Hash)
-		if err != nil {
-			return count, total, fmt.Errorf("restore %s (blob %s): %w", ref.Path, ref.Hash[:12], err)
-		}
-		if !trustLocal {
-			if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != ref.Hash {
-				return count, total, fmt.Errorf(
-					"restore %s: INTEGRITY FAILURE blob %s: content hash mismatch — refusing to write",
-					ref.Path, ref.Hash[:12])
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ref BlobRef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := s.GetBlob(ref.Hash)
+			if err != nil {
+				errCh <- fmt.Errorf("restore %s (blob %s): %w", ref.Path, ref.Hash[:12], err)
+				return
 			}
-		}
-		target := filepath.Join(dir, ref.Path)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return count, total, err
-		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
-			return count, total, err
-		}
-		// Restore with the BUILD-time mtime: build systems with
-		// mtime-based freshness (cargo's fingerprints) treat
-		// restore-time mtimes as "newer than sources" and recompile
-		// (measured: 15 of ~170 crates on the fact case study).
-		if m.BuiltAt > 0 {
-			t := time.Unix(0, m.BuiltAt)
-			os.Chtimes(target, t, t)
-		}
-		if ref.Mode != 0 {
-			os.Chmod(target, os.FileMode(ref.Mode))
-		}
-		count++
-		total += int64(len(data))
+			if !trustLocal {
+				if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != ref.Hash {
+					errCh <- fmt.Errorf(
+						"restore %s: INTEGRITY FAILURE blob %s: content hash mismatch — refusing to write",
+						ref.Path, ref.Hash[:12])
+					return
+				}
+			}
+			target := filepath.Join(dir, ref.Path)
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				errCh <- err
+				return
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				errCh <- err
+				return
+			}
+			// Restore with the BUILD-time mtime: build systems with
+			// mtime-based freshness (cargo's fingerprints) treat
+			// restore-time mtimes as "newer than sources" and recompile
+			// (measured: 15 of ~170 crates on the fact case study).
+			if m.BuiltAt > 0 {
+				t := time.Unix(0, m.BuiltAt)
+				os.Chtimes(target, t, t)
+			}
+			if ref.Mode != 0 {
+				os.Chmod(target, os.FileMode(ref.Mode))
+			}
+			mu.Lock()
+			count++
+			total += int64(len(data))
+			mu.Unlock()
+		}(ref)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return count, total, err
 	}
 	return count, total, nil
 }
