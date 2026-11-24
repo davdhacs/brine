@@ -7,6 +7,51 @@ import (
 	"time"
 )
 
+// The libtool .libs case: a hidden dir under a "/**" scope must NOT
+// be pruned even with an old mtime (restored by the incremental path)
+// — else the chain loses the shared library every generation.
+func TestSnapshotOutputsHiddenDirUnderScope(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := New(filepath.Join(dir, ".brine"))
+	readSet := []string{"input.txt"}
+	os.WriteFile(filepath.Join(dir, "input.txt"), []byte("in"), 0o644)
+	builtAt := time.Now().UnixNano()
+
+	// .libs file with an OLD mtime (restored state)
+	so := filepath.Join(dir, "bld/lib/.libs/libcurl.so")
+	os.MkdirAll(filepath.Dir(so), 0o755)
+	os.WriteFile(so, []byte("SHARED LIB"), 0o644)
+	old := time.Now().Add(-24 * time.Hour)
+	os.Chtimes(so, old, old)
+	// the .libs dir itself: old mtime too
+	os.Chtimes(filepath.Dir(so), old, old)
+
+	// scoped: bld/** must capture through the hidden dir
+	m, err := s.SnapshotOutputs("k", dir, readSet, builtAt, []string{"bld/**"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, b := range m.Blobs {
+		if b.Path == "bld/lib/.libs/libcurl.so" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("bld/** must capture the hidden .libs dir contents: %+v", m.Blobs)
+	}
+
+	// unscoped: hidden dir with old mtime still pruned (VCS, caches)
+	m2, err := s.SnapshotOutputs("k2", dir, readSet, builtAt, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range m2.Blobs {
+		if b.Path == "bld/lib/.libs/libcurl.so" {
+			t.Fatalf("unscoped snapshot must still prune old hidden dirs")
+		}
+	}
+}
 func TestMatchOutputScopeRecursive(t *testing.T) {
 	cases := map[string]struct {
 		patterns []string

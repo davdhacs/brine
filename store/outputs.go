@@ -50,9 +50,18 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 			// build itself created them (mtime > builtAt): build
 			// systems keep validity state in dot-dirs (cargo's
 			// target/debug/.fingerprint) that a receipt must restore
-			// for the tool to accept the outputs.
+			// for the tool to accept the outputs. A "/**" scope
+			// pattern covering the dir overrides the pruning: the
+			// user explicitly wants everything beneath it (libtool's
+			// bld/lib/.libs/ holds the real .so — restored with old
+			// mtimes by the incremental path, pruned from the next
+			// receipt, the chain loses the library — found live).
 			if strings.HasPrefix(info.Name(), ".") && info.ModTime().UnixNano() <= builtAt {
-				return filepath.SkipDir
+				relD, _ := filepath.Rel(dir, path)
+				relD = filepath.ToSlash(relD)
+				if !scopeCoversDir(outputPatterns, relD) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
@@ -152,6 +161,21 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 
 	sort.Slice(m.Blobs, func(i, j int) bool { return m.Blobs[i].Path < m.Blobs[j].Path })
 	return m, nil
+}
+
+// scopeCoversDir reports whether any "/**" output pattern's prefix
+// covers the directory (the user explicitly scoped into it — hidden
+// or not).
+func scopeCoversDir(patterns []string, relDir string) bool {
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "/**") {
+			prefix := strings.TrimSuffix(p, "**")
+			if strings.HasPrefix(relDir+"/", prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matchOutputScope matches a snapshot-scope pattern: exact relative
