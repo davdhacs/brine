@@ -42,12 +42,21 @@ import (
 
 // Remote is the cloud backend. A nil *Remote means "local only".
 type Remote struct {
+	backend string // "azure" (default) | "gha"
+
 	account   string
 	container string
 	tenantID  string
 	clientID  string
 	secret    string
 	staticTok string
+
+	// gha backend: Results API (cache v2) — base URL, runtime token,
+	// and the cache-entry version (sha256-hex; the service rejects
+	// short strings). Set by the env-bootstrap action in CI.
+	ghaBase string
+	ghaTok  string
+	ghaVer  string
 
 	client *http.Client
 
@@ -62,22 +71,40 @@ type Remote struct {
 }
 
 // NewRemoteFromEnv returns a Remote when remote mode is enabled
-// (BRINE_GOCACHE_REMOTE=1), else nil.
+// (BRINE_GOCACHE_REMOTE=1), else nil. Backend selection: explicit
+// BRINE_STORE_BACKEND wins; otherwise the GHA Results API is used
+// when the runner env (ACTIONS_RESULTS_URL + ACTIONS_RUNTIME_TOKEN,
+// forwarded by the env-bootstrap action) is present; otherwise Azure
+// when BRINE_AZURE_ACCOUNT is configured.
 func NewRemoteFromEnv() *Remote {
 	if os.Getenv("BRINE_GOCACHE_REMOTE") != "1" {
 		return nil
 	}
+	ghaBase := os.Getenv("ACTIONS_RESULTS_URL")
+	ghaTok := os.Getenv("ACTIONS_RUNTIME_TOKEN")
 	account := os.Getenv("BRINE_AZURE_ACCOUNT")
-	if account == "" {
-		return nil // remote off without an explicit account — never assume one
+	backend := os.Getenv("BRINE_STORE_BACKEND")
+	if backend == "" {
+		switch {
+		case ghaBase != "" && ghaTok != "":
+			backend = "gha"
+		case account != "":
+			backend = "azure"
+		default:
+			return nil // remote off without any backend — never assume one
+		}
 	}
 	r := &Remote{
+		backend:   backend,
 		account:   account,
 		container: envOr("BRINE_GOCACHE_CONTAINER", "brine"),
 		tenantID:  os.Getenv("AZURE_TENANT_ID"),
 		clientID:  os.Getenv("AZURE_CLIENT_ID"),
 		secret:    os.Getenv("AZURE_CLIENT_SECRET"),
 		staticTok: os.Getenv("BRINE_AZURE_TOKEN"),
+		ghaBase:   ghaBase,
+		ghaTok:    ghaTok,
+		ghaVer:    ghaVersion(),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			// Default Transport keeps only 2 idle conns per host — with
@@ -91,6 +118,9 @@ func NewRemoteFromEnv() *Remote {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
+	}
+	if backend == "gha" && (r.ghaBase == "" || r.ghaTok == "") {
+		return nil // forced gha without runner env — no backend
 	}
 	return r
 }
@@ -107,6 +137,12 @@ func (r *Remote) containerURL() string {
 }
 
 func (r *Remote) getToken() (string, error) {
+	if r.backend == "gha" {
+		if r.ghaTok == "" {
+			return "", fmt.Errorf("gha backend without runtime token")
+		}
+		return r.ghaTok, nil
+	}
 	if r.staticTok != "" {
 		return r.staticTok, nil
 	}
@@ -160,20 +196,41 @@ func (r *Remote) GetTokenPub() (string, error) {
 // store, and the caller masked it as "not found". Cancels only when no
 // bytes arrive for stallLimit.
 func (r *Remote) GetStreamingRaw(key, expectHash, dest string) error {
+	if r.backend == "gha" {
+		url, err := r.ghaLookupURL(key)
+		if err != nil {
+			return err
+		}
+		if url == "" {
+			return fmt.Errorf("remote GET %s: not found", key)
+		}
+		return r.streamURLToDest(url, nil, key, expectHash, dest)
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return err
 	}
+	return r.streamURLToDest(r.containerURL()+"/"+key,
+		map[string]string{
+			"Authorization": "Bearer " + token,
+			"x-ms-version":  "2023-11-03",
+		}, key, expectHash, dest)
+}
+
+// streamURLToDest streams a URL to dest with sha256 verification and
+// STALL detection instead of a total timeout (see GetStreamingRaw).
+func (r *Remote) streamURLToDest(url string, headers map[string]string, key, expectHash, dest string) error {
 	// no-total-timeout client sharing the transport pool
 	client := &http.Client{Transport: r.client.Transport}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", r.containerURL()+"/"+key, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("x-ms-version", "2023-11-03")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	const stallLimit = 30 * time.Second
 	timer := time.AfterFunc(stallLimit, cancel) // armed; reset on every read
@@ -237,6 +294,9 @@ func (r *Remote) GetStreamingRaw(key, expectHash, dest string) error {
 // returned unchecked (no AAD round-trip), which made an invalid token
 // look "OK" at worker startup (found the hard way).
 func (r *Remote) ValidateAuth() error {
+	if r.backend == "gha" {
+		return r.ghaValidateAuth()
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return err
@@ -265,6 +325,9 @@ func (r *Remote) ValidateAuth() error {
 
 // Get returns the blob at key, or nil,nil when absent.
 func (r *Remote) Get(key string) ([]byte, error) {
+	if r.backend == "gha" {
+		return r.ghaGet(key)
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return nil, err
@@ -292,6 +355,9 @@ func (r *Remote) Get(key string) ([]byte, error) {
 
 // put uploads body at key (gzip at rest), last-write-wins.
 func (r *Remote) put(key string, body []byte) error {
+	if r.backend == "gha" {
+		return r.ghaPut(key, body)
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return err
@@ -320,6 +386,9 @@ func (r *Remote) put(key string, body []byte) error {
 
 // putIfNotExist writes only when absent; returns false if it exists.
 func (r *Remote) putIfNotExist(key string, body []byte) (bool, error) {
+	if r.backend == "gha" {
+		return r.ghaStore(key, body) // raw bytes; duplicate → (false, nil)
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return false, err

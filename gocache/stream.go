@@ -226,6 +226,9 @@ func (r *Remote) putFileIfNotExistGzip(key, path string) (bool, error) {
 }
 
 func (r *Remote) exists(key string) (bool, error) {
+	if r.backend == "gha" {
+		return r.ghaExists(key)
+	}
 	token, err := r.getToken()
 	if err != nil {
 		return false, err

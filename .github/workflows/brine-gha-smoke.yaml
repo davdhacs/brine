@@ -1,0 +1,64 @@
+name: brine-gha-smoke
+# E10 acceptance: a memoized build round-trips through the real
+# GHA cache (v2 Results API): cold run stores the receipt remotely;
+# after wiping the local store, the warm run must hit the remote.
+on: workflow_dispatch
+
+permissions:
+  actions: write  # cache cleanup + listing
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build brine
+        run: go build -o /tmp/brine ./cmd/brine
+
+      - uses: ./.github/actions/env-bootstrap
+
+      - name: Cold run (stores receipt in the GHA cache)
+        run: |
+          mkdir -p $RUNNER_TEMP/smoke && cd $RUNNER_TEMP/smoke
+          git init -q .
+          printf 'int main(){return 0;}\n' > main.c
+          git add main.c
+          git -c user.name=t -c user.email=t@t commit -qm init
+          export BRINE_REMOTE=1 BRINE_GOCACHE_REMOTE=1
+          /tmp/brine gcc -O2 -o app main.c
+          test -x app || { echo "FAIL: no binary"; exit 1; }
+          ls .brine/manifests/ | head -2
+
+      - name: Verify the receipt landed in the GHA cache
+        run: |
+          N=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/davdhacs/brine/actions/caches?key=store/" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("total_count",0))')
+          echo "cache entries with store/ prefix: $N"
+          test "$N" -gt 0 || { echo "FAIL: no store/ entries in the GHA cache"; exit 1; }
+
+      - name: Wipe local store, warm run must hit the remote
+        run: |
+          cd $RUNNER_TEMP/smoke
+          rm -rf .brine app
+          export BRINE_REMOTE=1 BRINE_GOCACHE_REMOTE=1
+          OUT=$(/tmp/brine gcc -O2 -o app main.c 2>&1)
+          printf '%s\n' "$OUT"
+          echo "$OUT" | grep -q "CACHE HIT" || { echo "FAIL: no cache hit after local wipe"; exit 1; }
+          test -x app || { echo "FAIL: binary not restored"; exit 1; }
+          ./app && echo "binary runs OK"
+          echo "SMOKE-PASS: receipt round-tripped through the GHA cache"
+
+      - name: Cleanup (always)
+        if: always()
+        run: |
+          for id in $(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/davdhacs/brine/actions/caches?key=store/" \
+              | python3 -c 'import json,sys; [print(c["id"]) for c in json.load(sys.stdin).get("actions_caches",[])]'); do
+            curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/davdhacs/brine/actions/caches/$id"
+          done
+          echo cleanup done
