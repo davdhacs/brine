@@ -185,6 +185,38 @@ func TestGHATwirpAuthHeader(t *testing.T) {
 	}
 }
 
+func TestGHAConcurrentPuts(t *testing.T) {
+	// remoteUploadBlobs fires 16 concurrent PutIfNotExistPub calls —
+	// the client must be safe for that (shared http.Client, no
+	// mutable Remote state) and the server must see consistent state.
+	f := newFakeTwirpServer(t)
+	r := newGhaTestRemote(f)
+	const n = 48
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := fmt.Sprintf("store/b/blob%02d", i)
+			if _, err := r.PutIfNotExistPub(key, []byte(fmt.Sprintf("content-%d", i))); err != nil {
+				errCh <- fmt.Errorf("put %d: %w", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		ok, err := r.ExistsPub(fmt.Sprintf("store/b/blob%02d", i))
+		if err != nil || !ok {
+			t.Fatalf("blob %d missing after concurrent puts: %v %v", i, ok, err)
+		}
+	}
+}
+
 func TestGHAVersionIsSha256Hex(t *testing.T) {
 	v := ghaVersion()
 	if len(v) != 64 {

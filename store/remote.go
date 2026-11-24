@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"sync"
 	"fmt"
 	"os"
 
@@ -28,17 +29,43 @@ func (s *Store) SetRemote(r *gocache.Remote) {
 
 func (s *Store) hasRemote() bool { return s.remote != nil }
 
+// remoteUploadBlobs uploads receipt blobs concurrently (bounded 16).
+// Sequential uploads measured ~60s on the arm B dep receipt (125
+// blobs × ~0.5s per twirp create+PUT+finalize) — the upload must not
+// be the tail of a build that just finished. Error semantics match
+// the sequential form: any failure aborts with the first error.
+func (s *Store) remoteUploadBlobs(blobs []BlobRef) error {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	errCh := make(chan error, len(blobs))
+	for _, ref := range blobs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ref BlobRef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := s.GetBlob(ref.Hash)
+			if err != nil {
+				return // blob pruned locally; manifest still references it
+			}
+			if _, err := s.remote.PutIfNotExistPub(remoteBlobPrefix+ref.Hash, data); err != nil {
+				errCh <- fmt.Errorf("blob upload %s: %w", ref.Hash[:12], err)
+			}
+		}(ref)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
+	}
+	return nil
+}
+
 // remoteUploadManifest pushes the manifest JSON and every referenced
 // blob (content-addressed, If-None-Match dedup).
 func (s *Store) remoteUploadManifest(m *Manifest) error {
-	for _, ref := range m.Blobs {
-		data, err := s.GetBlob(ref.Hash)
-		if err != nil {
-			continue // blob pruned locally; manifest still references it
-		}
-		if _, err := s.remote.PutIfNotExistPub(remoteBlobPrefix+ref.Hash, data); err != nil {
-			return fmt.Errorf("blob upload %s: %w", ref.Hash[:12], err)
-		}
+	if err := s.remoteUploadBlobs(m.Blobs); err != nil {
+		return err
 	}
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -72,17 +99,31 @@ func (s *Store) EnsureRemote(m *Manifest) error {
 	if !s.hasRemote() || m == nil {
 		return nil
 	}
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	errCh := make(chan error, len(m.Blobs))
 	for _, ref := range m.Blobs {
 		if exists, err := s.remote.ExistsPub(remoteBlobPrefix + ref.Hash); err == nil && exists {
 			continue
 		}
-		data, err := s.GetBlob(ref.Hash)
-		if err != nil {
-			continue // blob pruned locally; manifest still references it
-		}
-		if _, err := s.remote.PutIfNotExistPub(remoteBlobPrefix+ref.Hash, data); err != nil {
-			return fmt.Errorf("blob upload %s: %w", ref.Hash[:12], err)
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ref BlobRef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			data, err := s.GetBlob(ref.Hash)
+			if err != nil {
+				return // blob pruned locally; manifest still references it
+			}
+			if _, err := s.remote.PutIfNotExistPub(remoteBlobPrefix+ref.Hash, data); err != nil {
+				errCh <- fmt.Errorf("blob upload %s: %w", ref.Hash[:12], err)
+			}
+		}(ref)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
 	}
 	if exists, err := s.remote.ExistsPub(remoteManifestPrefix + m.Key); err == nil && exists {
 		return nil
