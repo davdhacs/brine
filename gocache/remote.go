@@ -42,10 +42,11 @@ import (
 
 // Remote is the cloud backend. A nil *Remote means "local only".
 type Remote struct {
-	backend string // "azure" (default) | "gha"
+	backend string // "azure" (default) | "gha" | "fs"
 
 	account   string
 	container string
+	fsDir     string // fs backend root (BRINE_FS_STORE_DIR)
 	tenantID  string
 	clientID  string
 	secret    string
@@ -94,9 +95,22 @@ func NewRemoteFromEnv() *Remote {
 			return nil // remote off without any backend — never assume one
 		}
 	}
+	fsDir := ""
+	if backend == "fs" {
+		fsDir = os.Getenv("BRINE_FS_STORE_DIR")
+		if fsDir == "" {
+			cache := os.Getenv("XDG_CACHE_HOME")
+			if cache == "" {
+				home, _ := os.UserHomeDir()
+				cache = filepath.Join(home, ".cache")
+			}
+			fsDir = filepath.Join(cache, "brine-store")
+		}
+	}
 	r := &Remote{
 		backend:   backend,
 		account:   account,
+		fsDir:     fsDir,
 		container: envOr("BRINE_GOCACHE_CONTAINER", "brine"),
 		tenantID:  os.Getenv("AZURE_TENANT_ID"),
 		clientID:  os.Getenv("AZURE_CLIENT_ID"),
@@ -137,6 +151,9 @@ func (r *Remote) containerURL() string {
 }
 
 func (r *Remote) getToken() (string, error) {
+	if r.backend == "fs" {
+		return "fs", nil // no token needed; the dir is the credential
+	}
 	if r.backend == "gha" {
 		if r.ghaTok == "" {
 			return "", fmt.Errorf("gha backend without runtime token")
@@ -196,6 +213,9 @@ func (r *Remote) GetTokenPub() (string, error) {
 // store, and the caller masked it as "not found". Cancels only when no
 // bytes arrive for stallLimit.
 func (r *Remote) GetStreamingRaw(key, expectHash, dest string) error {
+	if r.backend == "fs" {
+		return r.fsStreamToDest(key, expectHash, dest)
+	}
 	if r.backend == "gha" {
 		url, err := r.ghaLookupURL(key)
 		if err != nil {
@@ -296,6 +316,9 @@ func (r *Remote) streamURLToDest(url string, headers map[string]string, key, exp
 // returned unchecked (no AAD round-trip), which made an invalid token
 // look "OK" at worker startup (found the hard way).
 func (r *Remote) ValidateAuth() error {
+	if r.backend == "fs" {
+		return r.fsValidateAuth()
+	}
 	if r.backend == "gha" {
 		return r.ghaValidateAuth()
 	}
@@ -327,6 +350,9 @@ func (r *Remote) ValidateAuth() error {
 
 // Get returns the blob at key, or nil,nil when absent.
 func (r *Remote) Get(key string) ([]byte, error) {
+	if r.backend == "fs" {
+		return r.fsGet(key)
+	}
 	if r.backend == "gha" {
 		return r.ghaGet(key)
 	}
@@ -357,6 +383,9 @@ func (r *Remote) Get(key string) ([]byte, error) {
 
 // put uploads body at key (gzip at rest), last-write-wins.
 func (r *Remote) put(key string, body []byte) error {
+	if r.backend == "fs" {
+		return r.fsPut(key, body)
+	}
 	if r.backend == "gha" {
 		return r.ghaPut(key, body)
 	}
@@ -388,6 +417,9 @@ func (r *Remote) put(key string, body []byte) error {
 
 // putIfNotExist writes only when absent; returns false if it exists.
 func (r *Remote) putIfNotExist(key string, body []byte) (bool, error) {
+	if r.backend == "fs" {
+		return r.fsPutIfNotExist(key, body)
+	}
 	if r.backend == "gha" {
 		return r.ghaStore(key, body) // raw bytes; duplicate → (false, nil)
 	}
