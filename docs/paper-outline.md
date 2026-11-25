@@ -128,6 +128,45 @@ observed reality diverged from declared/expected structure:
      consulted the shared store before building, so tarball-driven
      builds could never hit remotely. Found because arm B's dep
      receipt was stored but never reached.
+  F21 Stale static tokens beat fresh credentials (live, 2026-11-25):
+     BRINE_AZURE_TOKEN inherited by a worker process silently
+     overrides the client-credentials flow (staticTok is checked
+     first) — every upload 401s while manual probes with the real
+     SPN succeed. Credential precedence must not silently ignore
+     newer configuration.
+  F22 Store self-reference (live): a user git-add -A in a repo where
+     .brine/ exists commits brine's own store into the closure; every
+     fresh-machine run (which wipes .brine/) then mismatches its own
+     receipt inputs forever. Fix: gitTrackedFiles skips .brine/ paths.
+  F23 Missing ≠ corrupt (live): an Azure GET 404 surfaced as
+     "content does not hash to key" (an integrity-failure message),
+     sending the diagnosis chasing a poisoned blob that did not
+     exist. Fetch layers must distinguish not-found from corruption.
+  F24 Duplicate-hash existence checks (live): 2,569 empty kernel
+     output files share ONE content hash; a serial per-REF existence
+     check loop (no dedup) paid a round trip each — 197s added to a
+     receipt hit whose restore proper took seconds. Fix: dedup refs
+     by hash + parallelize checks.
+  F25 Hit time is bandwidth-bound (measured): the same 465 MB
+     receipt restore took 65s over a 2.6 MB/s home uplink (7.5 MB/s
+     aggregate, 16-way) vs seconds from local disk. Receipt-hit
+     speedup = cold_time / (outputs / bandwidth): the claim must be
+     parameterized by backend, not stated as a constant.
+  F26 Symlink outputs vanished (live): os.Open follows symlinks, so
+     the kernel make O= build/source -> .. (a dir symlink) failed
+     its blob read and silently dropped from the receipt; after
+     restore, make re-ran the entire prepare chain and failed.
+     Fix: symlinks are stored as their target path (content-
+     addressed) and recreated with os.Symlink.
+  F27 Hidden output files dropped (live): a blanket dot-file skip
+     removed the kernel build/.config and every .<file>.o.cmd
+     depfile from receipts — a restored tree could not even serve a
+     make no-op. Build systems keep validity state in dotfiles;
+     pre-existing noise is filtered by mtime/write rules instead.
+  F28 Post-restore warm no-op does partial work (open): a make no-op
+     after a full receipt restore completed 111s of rebuild vs ~4s
+     on a natively-built tree — some prepare-chain step still sees
+     staleness. Under investigation via the allmodconfig phase.
 
 
 ---
