@@ -1,0 +1,29 @@
+{"label":"smoke_hit","ms":29257,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"smoke_warm","ms":111688,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"cold_1","ms":1522973,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"cold_2","ms":1439471,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"cold_3","ms":1467258,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"store_run","ms":2975368,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_1","ms":859067,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_2","ms":522197,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_3","ms":660694,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_4","ms":924048,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_5","ms":530529,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"delta_1","ms":2797416,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"delta_2","ms":3208104,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"delta_3","ms":3535459,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"delta_4","ms":-1,"error":1}
+{"label":"delta_5","ms":-1,"error":1}
+{"label":"makewarm_1","ms":30111,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makewarm_2","ms":20502,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makewarm_3","ms":20334,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makewarm_4","ms":20452,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makewarm_5","ms":20413,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makedelta_1","ms":66998,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makedelta_2","ms":67925,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makedelta_3","ms":67532,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makedelta_4","ms":67914,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"makedelta_5","ms":65580,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor"}
+{"label":"hit_opt_1","ms":372000,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor","note":"parallel bundle fetch (ab79adc)"}
+{"label":"hit_opt_2","ms":402000,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor","note":"parallel bundle fetch (ab79adc)"}
+{"label":"hit_opt_3","ms":340000,"cpu":"AMD Ryzen 9 7950X3D 16-Core Processor","note":"parallel bundle fetch (ab79adc)"}
