@@ -1116,6 +1116,11 @@ func gitTrackedFiles(dir string) []string {
 			continue
 		}
 		mode, path := fields[0], fields[3]
+		if strings.HasPrefix(path, ".brine/") {
+			continue // brine's own store is never closure input (a
+			// user git-add -A would otherwise self-reference the store:
+			// fresh-machine wipes delete .brine/ → input mismatch forever)
+		}
 		if mode == "160000" {
 			// path is the submodule dir; its HEAD is the content key
 			if head, err := exec.Command("git", "-C", filepath.Join(dir, path), "-c", "safe.directory="+filepath.Join(dir, path), "rev-parse", "HEAD").Output(); err == nil {
