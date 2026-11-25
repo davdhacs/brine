@@ -28,6 +28,7 @@ package store
 
 import (
 	"bytes"
+	"sync"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -188,6 +189,14 @@ func (s *Store) fetchBundles(m *Manifest) error {
 	if !s.hasRemote() {
 		return nil
 	}
+	// Bundles fetch CONCURRENTLY (bounded): the kernel allmodconfig
+	// receipt packs ~12 GB into ~190 bundles; the serial loop fetched
+	// one at a time (fetch then unpack, no overlap) and dominated the
+	// restore — measured 522-924s hits whose data moves in seconds on
+	// SSD (E1 kernel experiment).
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	errCh := make(chan error, len(m.Bundles))
 	for _, b := range m.Bundles {
 		need := false
 		for _, h := range b.Members {
@@ -199,12 +208,24 @@ func (s *Store) fetchBundles(m *Manifest) error {
 		if !need {
 			continue
 		}
-		if err := s.remoteFetchBlob(b.Hash); err != nil {
-			return fmt.Errorf("bundle fetch: %w", err)
-		}
-		if err := s.unpackBundle(b); err != nil {
-			return err
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(b BundleRef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.remoteFetchBlob(b.Hash); err != nil {
+				errCh <- fmt.Errorf("bundle fetch: %w", err)
+				return
+			}
+			if err := s.unpackBundle(b); err != nil {
+				errCh <- err
+			}
+		}(b)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		return err
 	}
 	return nil
 }
