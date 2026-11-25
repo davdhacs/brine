@@ -288,6 +288,17 @@ func (s *Store) RestoreManifest(m *Manifest, dir string) (int, int64, error) {
 					errCh <- err
 					return
 				}
+				// Symlink outputs: the blob content IS the target path.
+				// Recreate the link (replace whatever is there — a
+				// regular file from an older restore, or a stale link).
+				if os.FileMode(p.Mode)&os.ModeSymlink != 0 {
+					os.Remove(target)
+					if err := os.Symlink(string(data), target); err != nil {
+						errCh <- err
+						return
+					}
+					continue
+				}
 				if err := os.WriteFile(target, data, 0o644); err != nil {
 					errCh <- err
 					return

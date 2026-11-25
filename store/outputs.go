@@ -107,6 +107,26 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 			return nil
 		}
 
+		// Symlinks are stored as their TARGET PATH (the blob content
+		// is the readlink string — content-addressed and dedup-able).
+		// os.Open would FOLLOW the link: for dir symlinks like the
+		// kernel make O= build/source -> .. it opens a directory, the
+		// blob read fails, and the link silently vanishes from the
+		// receipt — after restore, make re-runs prepare because the
+		// output tree looks unprepared (found live in the E1 kernel
+		// experiment: warm no-op became a full prepare re-run).
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return nil
+			}
+			hash, size, err := s.PutBlob(strings.NewReader(target))
+			if err != nil {
+				return nil
+			}
+			m.Blobs = append(m.Blobs, BlobRef{Hash: hash, Path: rel, Size: size, Mode: uint32(info.Mode())})
+			return nil
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			if os.Getenv("BRINE_DEBUG") != "" {
