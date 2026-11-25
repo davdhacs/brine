@@ -73,15 +73,13 @@ func (s *Store) SnapshotOutputs(key, dir string, readSet []string, builtAt int64
 		if strings.HasPrefix(rel, ".brine") || strings.HasPrefix(rel, ".git/") {
 			return nil
 		}
-		// Dot-FILES (e.g. .DS_Store) are skipped individually; dot-DIRECTORIES
-		// (.git, .idea) are pruned. SkipDir on a file would skip the rest of
-		// its directory — .DS_Store in the repo root would silently end the
-		// walk and capture nothing.
-		// Hidden FILES are skipped (state files are handled at the
-		// directory level below).
-		if strings.HasPrefix(filepath.Base(rel), ".") {
-			return nil
-		}
+		// Hidden FILES are NOT skipped here: build systems keep their
+		// validity state in dotfiles (the kernel's build/.config and
+		// .<file>.o.cmd depfiles; autotools .deps/*.Plo) — a blanket
+		// dot-skip dropped them from receipts, and without .config a
+		// restored kernel tree made make re-run config and fail (found
+		// live in E1). Pre-existing noise (.DS_Store) is filtered by
+		// the mtime/write rules below like any other stale file.
 
 		// Rule (a): inputs are never outputs — EXCEPT files written
 		// during the build (mtime > builtAt): a build-writer cannot be

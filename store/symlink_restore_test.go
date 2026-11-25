@@ -33,6 +33,15 @@ func TestSymlinkOutputsSurviveRestore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(out, "app.bin"), []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// hidden outputs: the kernel build's .config and .foo.o.cmd depfiles
+	// must be captured (a blanket dot-skip dropped them; without .config
+	// a restored tree made make re-run config and fail)
+	if err := os.WriteFile(filepath.Join(out, ".config"), []byte("CONFIG_X=y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, ".app.bin.o.cmd"), []byte("cmdline"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	m, err := st.SnapshotOutputs("k", out, nil, 0, []string{}, nil)
 	if err != nil {
@@ -44,6 +53,9 @@ func TestSymlinkOutputsSurviveRestore(t *testing.T) {
 	}
 	if !found["source"] || !found["app"] {
 		t.Fatalf("symlinks missing from receipt: %v", found)
+	}
+	if !found[".config"] || !found[".app.bin.o.cmd"] {
+		t.Fatalf("hidden outputs missing from receipt: %v", found)
 	}
 
 	// wipe and restore into a fresh dir
@@ -67,6 +79,9 @@ func TestSymlinkOutputsSurviveRestore(t *testing.T) {
 	fi, err = os.Lstat(filepath.Join(fresh, "app"))
 	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("app not restored as symlink: %v %v", fi, err)
+	}
+	if cfg, err := os.ReadFile(filepath.Join(fresh, ".config")); err != nil || string(cfg) != "CONFIG_X=y" {
+		t.Fatalf(".config restored as %q, %v", cfg, err)
 	}
 	bin := filepath.Join(fresh, "app.bin")
 	fi, err = os.Stat(bin)
