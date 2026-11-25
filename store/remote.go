@@ -102,10 +102,40 @@ func (s *Store) EnsureRemote(m *Manifest) error {
 	}
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 16)
-	refs := transportRefs(m)
+	// Dedup by hash: outputs with identical content (2569 empty files
+	// in a kernel build all share the empty-content hash) otherwise pay
+	// one serial existence-check round trip EACH — measured 197s on a
+	// commit-receipt hit whose restore proper took seconds (E1 kernel
+	// experiment).
+	seen := map[string]bool{}
+	var refs []BlobRef
+	for _, ref := range transportRefs(m) {
+		if !seen[ref.Hash] {
+			seen[ref.Hash] = true
+			refs = append(refs, ref)
+		}
+	}
 	errCh := make(chan error, len(refs))
-	for _, ref := range refs {
-		if exists, err := s.remote.ExistsPub(remoteBlobPrefix + ref.Hash); err == nil && exists {
+	// existence checks run concurrently too (bounded): distinct refs
+	// each cost one round trip and the serial loop dominated restores
+	// of manifests with many mid-size unbundled blobs
+	exists := make([]bool, len(refs))
+	var ewg sync.WaitGroup
+	esem := make(chan struct{}, 16)
+	for i, ref := range refs {
+		ewg.Add(1)
+		esem <- struct{}{}
+		go func(i int, hash string) {
+			defer ewg.Done()
+			defer func() { <-esem }()
+			if ok, err := s.remote.ExistsPub(remoteBlobPrefix + hash); err == nil {
+				exists[i] = ok
+			}
+		}(i, ref.Hash)
+	}
+	ewg.Wait()
+	for i, ref := range refs {
+		if exists[i] {
 			continue
 		}
 		wg.Add(1)
